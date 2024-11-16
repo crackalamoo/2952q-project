@@ -9,8 +9,8 @@ from transformers import AutoTokenizer, EsmForProteinFolding
 tokenizer = AutoTokenizer.from_pretrained("facebook/esmfold_v1")
 model = EsmForProteinFolding.from_pretrained("facebook/esmfold_v1", low_cpu_mem_usage=True)
 
-# model = model.cuda()
-model = model.to('cuda')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = model.to(device)
 
 # Uncomment to switch the stem to float16
 model.esm = model.esm.half()
@@ -23,8 +23,7 @@ test_protein = "MGAGASAEEKHSRELEKKLKEDAEKDARTVKLLLLGAGESGKSTIVKQMKIIHQDGYSLEECLE
 
 tokenized_input = tokenizer([test_protein], return_tensors="pt", add_special_tokens=False)['input_ids']
 
-# tokenized_input = tokenized_input.cuda()
-tokenized_input = tokenized_input.to('cuda')
+tokenized_input = tokenized_input.to(device)
 
 with torch.no_grad():
     output = model(tokenized_input)
@@ -73,7 +72,9 @@ pdb = convert_outputs_to_pdb(output)
 
 print("PDB")
 print(pdb)
-with open("~/scratch/bio-out/output_structure.pdb", "w") as f:
-    f.write("".join(pdb))
+home_dir = os.environ['HOME']
+with open(f"{home_dir}/scratch/bio-out/output_structure.pdb", "w+") as f:
+    # f.write("".join(pdb))
+    f.write(pdb[0])
 
 print("Done")
