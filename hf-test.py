@@ -55,21 +55,6 @@ def convert_outputs_to_pdb(outputs):
 
 pdb = convert_outputs_to_pdb(output)
 
-# import py3Dmol
-# 
-# view = py3Dmol.view(js='https://3dmol.org/build/3Dmol.js', width=800, height=400)
-# view.addModel("".join(pdb), 'pdb')
-# view.setStyle({'model': -1}, {"cartoon": {'color': 'spectrum'}})
-# 
-# if torch.max(output['plddt']) <= 1.0: # probabilities for each atom
-#     vmin = 0.5
-#     vmax = 0.95
-# else:
-#     vmin = 50
-#     vmax = 95
-# 
-# view.setStyle({'cartoon': {'colorscheme': {'prop':'b','gradient': 'roygb','min': vmin,'max': vmax}}})
-
 print("PDB")
 print(pdb)
 home_dir = os.environ['HOME']
