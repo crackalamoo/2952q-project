@@ -163,5 +163,6 @@ cython_debug/
 
 # My .gitignore
 batch.script
+cpu.script
 out/*
 notes.txt

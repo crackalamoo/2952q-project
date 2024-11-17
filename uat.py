@@ -3,6 +3,7 @@ os.environ['HF_HOME'] = '~/scratch/huggingface'
 
 import torch
 import esm_2952q as esm
+import uniprot
 
 def get_trigger(tokenizer, model, seqs, device):
     trigger = 'G' * 25 # TODO: discover actual trigger
@@ -10,11 +11,12 @@ def get_trigger(tokenizer, model, seqs, device):
     inputs = tokenizer(seqs, return_tensors='pt', add_special_tokens=False)['input_ids']
     inputs = inputs.to(device)
 
-    outputs = model(inputs)
-    print(outputs)
+    with torch.no_grad():
+        outputs = model(inputs)
+    print(outputs.keys())
 
-    pdb = convert_outputs_to_pdb(outputs)
-    save_pdb(pdb, 'output_structure.pdb')
+    pdb = esm.convert_outputs_to_pdb(outputs)
+    esm.save_pdb(pdb, 'output_structure.pdb')
 
     return trigger
 
@@ -27,8 +29,10 @@ if __name__ == '__main__':
     torch.backends.cuda.matmul.allow_tf32 = True
     model.trunk.set_chunk_size(64)
 
-    seqs = esm.test_proteins
+    # seqs = esm.test_proteins
+    seqs = uniprot.read_seqs_list()[:1]
+    print(seqs)
 
     trigger = get_trigger(tokenizer, model, seqs, device)
-    print(trigger)
+    print("Trigger:", trigger)
     print("Done")
