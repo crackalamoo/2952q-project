@@ -1,0 +1,34 @@
+import os
+os.environ['HF_HOME'] = '~/scratch/huggingface'
+
+import torch
+import esm_2952q as esm
+
+def get_trigger(tokenizer, model, seqs, device):
+    trigger = 'G' * 25 # TODO: discover actual trigger
+    
+    inputs = tokenizer(seqs, return_tensors='pt', add_special_tokens=False)['input_ids']
+    inputs = inputs.to(device)
+
+    outputs = model(inputs)
+    print(outputs)
+
+    pdb = convert_outputs_to_pdb(outputs)
+    save_pdb(pdb, 'output_structure.pdb')
+
+    return trigger
+
+if __name__ == '__main__':
+    tokenizer, model = esm.get_esmfold()
+    device = torch.device('cuda')
+    model = model.to(device)
+
+    model.esm = model.esm.half()
+    torch.backends.cuda.matmul.allow_tf32 = True
+    model.trunk.set_chunk_size(64)
+
+    seqs = esm.test_proteins
+
+    trigger = get_trigger(tokenizer, model, seqs, device)
+    print(trigger)
+    print("Done")

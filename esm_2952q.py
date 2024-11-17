@@ -38,6 +38,10 @@ def convert_outputs_to_pdb(outputs):
         pdbs.append(to_pdb(pred))
     return pdbs
 
+def save_pdb(pdb, fname):
+    home_dir = os.environ['HOME']
+    with open(f"{home_dir}/scratch/bio-out/{fname}", "w+") as f:
+        f.write(pdb[0])
 
 if __name__ == '__main__':
     tokenizer, model = get_esmfold()
@@ -45,7 +49,6 @@ if __name__ == '__main__':
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
 
-# Uncomment to switch the stem to float16
     model.esm = model.esm.half()
 
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -59,10 +62,6 @@ if __name__ == '__main__':
     print(outputs)
 
     pdb = convert_outputs_to_pdb(outputs)
-
-    home_dir = os.environ['HOME']
-    with open(f"{home_dir}/scratch/bio-out/output_structure.pdb", "w+") as f:
-        # f.write("".join(pdb))
-        f.write(pdb[0])
+    save_pdb(pdb, 'output_structure.pdb')
 
     print("Done")
