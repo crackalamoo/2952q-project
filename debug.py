@@ -4,6 +4,35 @@ import esm_2952q as esm
 from transformers.models.esm.modeling_esmfold import categorical_lddt, EsmForProteinFoldingOutput
 from transformers.models.esm.openfold_utils import make_atom14_masks, compute_tm, compute_predicted_aligned_error
 
+def my_esm_forward(model, esmaa):
+    assert not model.esm.config.output_attentions
+    assert not model.esm.config.is_decoder
+    input_shape = esmaa.size()
+    attention_mask = esmaa != 1
+    extended_attention_mask = model.esm.get_extended_attention_mask(attention_mask, input_shape)
+    head_mask = model.esm.get_head_mask(None, model.config.num_hidden_layers)
+    embedding_output = model.esm.embeddings(
+        input_ids=esmaa,
+        position_ids=None,
+        attention_mask=attention_mask,
+        inputs_embeds=None,
+        past_key_values_length=0
+    )
+    encoder_outputs = model.esm.encoder(
+        embedding_output,
+        attention_mask=extended_attention_mask,
+        head_mask=head_mask,
+        encoder_hidden_states=None,
+        encoder_attention_mask=None,
+        past_key_values=None,
+        use_cache=False,
+        output_attentions=False,
+        output_hidden_states=True,
+        return_dict=True,
+    )
+
+    esm_hidden_states = encoder_outputs.hidden_states
+    return {'hidden_states': esm_hidden_states, 'embedding_output': embedding_output}
 
 def my_forward(tokenizer, model, sequences):
     # tokenize inputs
@@ -40,36 +69,9 @@ def my_forward(tokenizer, model, sequences):
     esmaa[range(B), (esmaa != 1).sum(1)] = eosi
 
     # esm_hidden_states = model.esm(esmaa, attention_mask=esmaa != 1, output_hidden_states=True)['hidden_states']
-        # model.esm(esmaa, attention_mask=esmaa != 1, output_hidden_states=True)['hidden_states'] {
-    assert not model.esm.config.output_attentions
-    assert not model.esm.config.is_decoder
-    input_shape = esmaa.size()
-    assert attention_mask is not None
-    amask = esmaa != 1
-    extended_attention_mask = model.esm.get_extended_attention_mask(amask, input_shape)
-    head_mask = model.esm.get_head_mask(None, model.config.num_hidden_layers)
-    embedding_output = model.esm.embeddings(
-        input_ids=esmaa,
-        position_ids=position_ids,
-        attention_mask=amask,
-        inputs_embeds=None,
-        past_key_values_length=0
-    )
-    encoder_outputs = model.esm.encoder(
-        embedding_output,
-        attention_mask=extended_attention_mask,
-        head_mask=head_mask,
-        encoder_hidden_states=None,
-        encoder_attention_mask=None,
-        past_key_values=None,
-        use_cache=False,
-        output_attentions=False,
-        output_hidden_states=True,
-        return_dict=True,
-    )
-
-    esm_hidden_states = encoder_outputs.hidden_states
-        # }
+    esm_output = my_esm_forward(model, esmaa)
+    esm_hidden_states = esm_output['hidden_states']
+    embeddings = esm_output['embedding_output']
 
     esm_s = torch.stack(esm_hidden_states, dim=2)
     esm_s = esm_s[:, 1:-1] # B, L, nLayers, C
@@ -124,7 +126,7 @@ def my_forward(tokenizer, model, sequences):
     structure["ptm"] = compute_tm(ptm_logits, max_bin=31, no_bins=model.distogram_bins)
     structure.update(compute_predicted_aligned_error(ptm_logits, max_bin=31, no_bins=model.distogram_bins))
 
-    return EsmForProteinFoldingOutput(**structure)
+    return EsmForProteinFoldingOutput(**structure), embeddings
 
 if __name__ == '__main__':
     print("Loading...")
@@ -138,7 +140,7 @@ if __name__ == '__main__':
     model.trunk.set_chunk_size(64)
 
     print(tokenizer)
-    aa = ['A','R','N','D','C','Q','E','G','H','I','L','K','M','F','P','S','T','W','Y','V', 'MATG'] # exclude Pyrrolysine and Selenocysteine
+    aa = ['A','R','N','D','C','Q','E','G','H','I','L','K','M','F','P','S','T','W','Y','V', 'MATGT'] # exclude pyrrolysine and selenocysteine
     inputs = tokenizer(aa, add_special_tokens=False, return_tensors='pt', padding=True)
     ids = inputs['input_ids'].to(device)
     mask = inputs['attention_mask'].to(device)
@@ -151,8 +153,12 @@ if __name__ == '__main__':
     with torch.no_grad():
         true = model(ids, attention_mask=mask)
         my = my_forward(tokenizer, model, aa)
+        embeddings = my[1]
+        my = my[0]
     print(true.keys())
     print(my.keys())
+    print("embeddings:", embeddings.shape)
+    print(torch.allclose(embeddings[-1, -2, :], embeddings[-1, -4, :])) # the two threonines should have the same embedding
     for k in ["positions", "predicted_aligned_error", "max_predicted_aligned_error", "s_s"]:
         if torch.allclose(true[k], my[k]):
             print(f"{k} ({true[k].shape}) OK")
