@@ -1,6 +1,5 @@
 import os
-os.environ['HF_HOME'] = '~/scratch/huggingface'
-
+import sys
 import torch
 import esm_2952q as esm
 import uniprot
@@ -9,6 +8,7 @@ def get_trigger(tokenizer, model, seqs, device):
     trigger = 'G' * 25 # TODO: discover actual trigger
     
     inputs = tokenizer(seqs, return_tensors='pt', add_special_tokens=False)['input_ids']
+    print("tokens:", inputs)
     inputs = inputs.to(device)
 
     with torch.no_grad():
