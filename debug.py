@@ -5,9 +5,14 @@ from transformers.models.esm.modeling_esmfold import categorical_lddt, EsmForPro
 from transformers.models.esm.openfold_utils import make_atom14_masks, compute_tm, compute_predicted_aligned_error
 
 
-def my_forward(model, input_ids, attention_mask=None):
+def my_forward(tokenizer, model, sequences):
+    # tokenize inputs
+    inputs = tokenizer(sequences, add_special_tokens=False, padding=True, return_tensors='pt')
+    input_ids = inputs.input_ids.to(model.device)
+    attention_mask = inputs.attention_mask.to(model.device)
     num_recycles = None
 
+    # generate constants and position ids
     cfg = model.config.esmfold_config
     aa = input_ids
     B = aa.shape[0]
@@ -17,11 +22,59 @@ def my_forward(model, input_ids, attention_mask=None):
         attention_mask = torch.ones_like(aa, device=device)
     position_ids = torch.arange(L, device=device).expand_as(input_ids)
 
-    esmaa = model.af2_idx_to_esm_idx(aa, attention_mask)
+    # convert indices to esm
+    esmaa = model.af2_idx_to_esm_idx(aa, attention_mask) # esm amino acids
     masked_aa = aa
-    mlm_targets = None
 
-    esm_s = model.compute_language_model_representations(esmaa)
+    # esm_s = model.compute_language_model_representations(esmaa)
+    # model.compute_language_model_representations(esmaa) {
+    if model.esm.config.esmfold_config.bypass_lm:
+        assert False
+
+    # add bos and eos tokens
+    bosi, eosi = model.esm_dict_cls_idx, model.esm_dict_eos_idx
+    bos = esmaa.new_full((B, 1), bosi)
+    eos = esmaa.new_full((B, 1), model.esm_dict_padding_idx)
+    esmaa = torch.cat([bos, esmaa, eos], dim=1)
+    # use the first padding index as eos during inference
+    esmaa[range(B), (esmaa != 1).sum(1)] = eosi
+
+    # esm_hidden_states = model.esm(esmaa, attention_mask=esmaa != 1, output_hidden_states=True)['hidden_states']
+        # model.esm(esmaa, attention_mask=esmaa != 1, output_hidden_states=True)['hidden_states'] {
+    assert not model.esm.config.output_attentions
+    assert not model.esm.config.is_decoder
+    input_shape = esmaa.size()
+    assert attention_mask is not None
+    amask = esmaa != 1
+    extended_attention_mask = model.esm.get_extended_attention_mask(amask, input_shape)
+    head_mask = model.esm.get_head_mask(None, model.config.num_hidden_layers)
+    embedding_output = model.esm.embeddings(
+        input_ids=esmaa,
+        position_ids=position_ids,
+        attention_mask=amask,
+        inputs_embeds=None,
+        past_key_values_length=0
+    )
+    encoder_outputs = model.esm.encoder(
+        embedding_output,
+        attention_mask=extended_attention_mask,
+        head_mask=head_mask,
+        encoder_hidden_states=None,
+        encoder_attention_mask=None,
+        past_key_values=None,
+        use_cache=False,
+        output_attentions=False,
+        output_hidden_states=True,
+        return_dict=True,
+    )
+
+    esm_hidden_states = encoder_outputs.hidden_states
+        # }
+
+    esm_s = torch.stack(esm_hidden_states, dim=2)
+    esm_s = esm_s[:, 1:-1] # B, L, nLayers, C
+    # } model.compute_language_model_representations
+
     esm_s = esm_s.to(model.esm_s_combine.dtype)
     esm_s = esm_s.detach()
 
@@ -85,7 +138,7 @@ if __name__ == '__main__':
     model.trunk.set_chunk_size(64)
 
     print(tokenizer)
-    aa = ['A','R','N','D','C','Q','E','G','H','I','L','K','M','F','P','S','T','W','Y','V', 'MAAV'] # exclude Pyrrolysine and Selenocysteine
+    aa = ['A','R','N','D','C','Q','E','G','H','I','L','K','M','F','P','S','T','W','Y','V', 'MATG'] # exclude Pyrrolysine and Selenocysteine
     inputs = tokenizer(aa, add_special_tokens=False, return_tensors='pt', padding=True)
     ids = inputs['input_ids'].to(device)
     mask = inputs['attention_mask'].to(device)
@@ -97,10 +150,10 @@ if __name__ == '__main__':
 
     with torch.no_grad():
         true = model(ids, attention_mask=mask)
-        my = my_forward(model, ids, attention_mask=mask)
+        my = my_forward(tokenizer, model, aa)
     print(true.keys())
     print(my.keys())
-    for k in ["positions", "predicted_aligned_error", "max_predicted_aligned_error"]:
+    for k in ["positions", "predicted_aligned_error", "max_predicted_aligned_error", "s_s"]:
         if torch.allclose(true[k], my[k]):
             print(f"{k} ({true[k].shape}) OK")
         else:
