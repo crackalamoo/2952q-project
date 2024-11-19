@@ -3,13 +3,15 @@ import sys
 import torch
 import esm_2952q as esm
 import uniprot
+from torch.utils.checkpoint import checkpoint
 
 def get_trigger(tokenizer, model, seqs, device):
     trigger = 'G' * 25 # TODO: discover actual trigger
     
-    # with torch.cuda.amp.autocast():
-    with torch.no_grad():
-        outputs, embeddings = esm.my_forward(tokenizer, model, seqs)
+    with torch.cuda.amp.autocast():
+    # with torch.no_grad():
+        custom_forward = lambda seqs: esm.my_forward(tokenizer, model, seqs)
+        outputs, embeddings = checkpoint(custom_forward, seqs)
     print(outputs.positions)
 
     pdb = esm.convert_outputs_to_pdb(outputs)
@@ -26,15 +28,10 @@ if __name__ == '__main__':
     torch.backends.cuda.matmul.allow_tf32 = True
     model.trunk.set_chunk_size(1)
     model.trunk.config.max_recycles = 1
-    model.trunk = model.trunk.half()
-    model.trunk.pairwise_positional_embedding = model.trunk.pairwise_positional_embedding.half()
-    model.distogram_head = model.distogram_head.half()
-    model.lddt_head = model.lddt_head.half()
-    model.ptm_head = model.ptm_head.half()
-    model.lm_head = model.lm_head.half()
+    # model.trunk.to('cpu')
 
     # seqs = esm.test_proteins
-    seqs = uniprot.read_seqs_list()[:1]
+    seqs = uniprot.read_seqs_list()[:1][:4]
     print(seqs)
 
     torch.cuda.empty_cache()
