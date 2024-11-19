@@ -3,8 +3,10 @@ os.environ['HF_HOME'] = '~/scratch/huggingface'
 
 import sys
 import torch
-from transformers import AutoTokenizer, EsmForProteinFolding
 
+from torch.utils.checkpoint import checkpoint
+
+from transformers import AutoTokenizer, EsmForProteinFolding
 from transformers.models.esm.openfold_utils import make_atom14_masks, compute_tm, compute_predicted_aligned_error
 from transformers.models.esm.openfold_utils.protein import to_pdb, Protein as OFProtein
 from transformers.models.esm.openfold_utils.feats import atom14_to_atom37
@@ -24,7 +26,7 @@ test_proteins = [
 
 def convert_outputs_to_pdb(outputs):
     final_atom_positions = atom14_to_atom37(outputs["positions"][-1], outputs)
-    outputs = {k: v.to("cpu").numpy() for k, v in outputs.items()}
+    outputs = {k: v.detach().to("cpu").numpy() for k, v in outputs.items()}
     final_atom_positions = final_atom_positions.cpu().numpy()
     final_atom_mask = outputs["atom37_atom_exists"]
     pdbs = []
@@ -49,13 +51,9 @@ def save_pdb(pdb, fname):
     with open(f"{home_dir}/scratch/bio-out/{fname}", "w+") as f:
         f.write(pdb[0])
 
-def _my_esm_forward(model, esmaa):
-    assert not model.esm.config.output_attentions
-    assert not model.esm.config.is_decoder
+def _my_esm_embeds(model, esmaa):
     input_shape = esmaa.size()
     attention_mask = esmaa != 1
-    extended_attention_mask = model.esm.get_extended_attention_mask(attention_mask, input_shape)
-    head_mask = model.esm.get_head_mask(None, model.config.num_hidden_layers)
     embedding_output = model.esm.embeddings(
         input_ids=esmaa,
         position_ids=None,
@@ -64,6 +62,13 @@ def _my_esm_forward(model, esmaa):
         past_key_values_length=0
     )
     embedding_output.requires_grad_(True) # critical line here!
+    embedding_output.retain_grad()
+    return embedding_output
+def _my_esm_forward(model, esmaa, embedding_output):
+    input_shape = esmaa.size()
+    attention_mask = esmaa != 1
+    extended_attention_mask = model.esm.get_extended_attention_mask(attention_mask, input_shape)
+    head_mask = model.esm.get_head_mask(None, model.config.num_hidden_layers)
     encoder_outputs = model.esm.encoder(
         embedding_output,
         attention_mask=extended_attention_mask,
@@ -78,7 +83,7 @@ def _my_esm_forward(model, esmaa):
     )
 
     esm_hidden_states = encoder_outputs.hidden_states
-    return {'hidden_states': esm_hidden_states, 'embedding_output': embedding_output}
+    return esm_hidden_states
 
 def _my_rel_pos_forward(pairwise_pos_e, residue_index, mask=None):
     # ignore ValueErrors
@@ -117,9 +122,12 @@ def _my_trunk_forward(trunk, seq_feats, pair_feats, true_aa, residx, mask, no_re
 
     for recycle_idx in range(no_recycles):
         with ContextManagers([] if recycle_idx == no_recycles - 1 else [torch.no_grad()]):
-            recycle_s = trunk.recycle_s_norm(recycle_s.detach()).to(device)
-            recycle_z = trunk.recycle_z_norm(recycle_z.detach()).to(device)
-            recycle_z += trunk.recycle_disto(recycle_bins.detach()).to(device)
+            # recycle_s = trunk.recycle_s_norm(recycle_s.detach()).to(device)
+            # recycle_z = trunk.recycle_z_norm(recycle_z.detach()).to(device)
+            # recycle_z += trunk.recycle_disto(recycle_bins.detach()).to(device)
+            recycle_s = trunk.recycle_s_norm(recycle_s)
+            recycle_z = trunk.recycle_z_norm(recycle_z)
+            recycle_z += trunk.recycle_disto(recycle_bins)
 
             s_s, s_z = trunk_iter(s_s_0 + recycle_s, s_z_0 + recycle_z, residx, mask)
 
@@ -179,79 +187,89 @@ def my_forward(tokenizer, model, sequences):
     # use the first padding index as eos during inference
     esmaa[range(B), (esmaa != 1).sum(1)] = eosi
 
-    # esm_hidden_states = model.esm(esmaa, attention_mask=esmaa != 1, output_hidden_states=True)['hidden_states']
-    esm_output = _my_esm_forward(model, esmaa)
-    esm_hidden_states = esm_output['hidden_states']
-    embeddings = esm_output['embedding_output']
+    esm_embeds = _my_esm_embeds(model, esmaa)
+    def model_body(embeds):
+        nonlocal position_ids
+        nonlocal attention_mask
+        nonlocal esmaa
+        nonlocal masked_aa
+        esm_output = _my_esm_forward(model, esmaa, embeds)
+        esm_hidden_states = esm_output
 
-    esm_s = torch.stack(esm_hidden_states, dim=2)
-    esm_s = esm_s[:, 1:-1] # B, L, nLayers, C
-    # } model.compute_language_model_representations
+        esm_s = torch.stack(esm_hidden_states, dim=2)
+        esm_s = esm_s[:, 1:-1] # B, L, nLayers, C
+        # } model.compute_language_model_representations
 
-    esm_s = esm_s.to(model.esm_s_combine.dtype)
-    esm_s = esm_s.detach()
+        esm_s = esm_s.to(model.esm_s_combine.dtype)
+        # esm_s = esm_s.detach()
 
-    esm_s = (model.esm_s_combine.softmax(0).unsqueeze(0) @ esm_s).squeeze(2)
-    s_s_0 = model.esm_s_mlp(esm_s)
-    s_z_0 = s_s_0.new_zeros(B, L, L, cfg.trunk.pairwise_state_dim)
+        esm_s = (model.esm_s_combine.softmax(0).unsqueeze(0) @ esm_s).squeeze(2)
+        s_s_0 = model.esm_s_mlp(esm_s)
+        s_z_0 = s_s_0.new_zeros(B, L, L, cfg.trunk.pairwise_state_dim)
 
-    if model.config.esmfold_config.embed_aa:
-        s_s_0 += model.embedding(masked_aa)
-    print("Got s_s, s_z")
-    trunk_dt = model.trunk.trunk2sm_s.weight.dtype
-    s_s_0 = s_s_0.to(dtype=trunk_dt)
-    s_z_0 = s_z_0.to(dtype=trunk_dt)
-    # aa = aa.to(dtype=trunk_dt)
-    position_ids = position_ids.to(dtype=trunk_dt)
-    attention_mask = attention_mask.to(dtype=trunk_dt)
-    print("s_s_0:", s_s_0.dtype)
-    print("trunk:", model.trunk.trunk2sm_s.weight.dtype)
-    print(torch.cuda.memory_summary(device=model.device))
+        if model.config.esmfold_config.embed_aa:
+            s_s_0 += model.embedding(masked_aa)
+        print("Got s_s, s_z")
+        trunk_dt = model.trunk.trunk2sm_s.weight.dtype
+        s_s_0 = s_s_0.to(dtype=trunk_dt)
+        s_z_0 = s_z_0.to(dtype=trunk_dt)
+        # aa = aa.to(dtype=trunk_dt)
+        position_ids = position_ids.to(dtype=trunk_dt)
+        attention_mask = attention_mask.to(dtype=trunk_dt)
+        print("s_s_0:", s_s_0.dtype)
+        print("trunk:", model.trunk.trunk2sm_s.weight.dtype)
 
-    sys.stdout.flush()
-    structure = _my_trunk_forward(model.trunk, s_s_0, s_z_0, aa, position_ids, attention_mask, no_recycles=num_recycles)
-    print("Got structure")
-    structure = {
-        k: v
-        for k, v in structure.items()
-        if k
-        in [
-            "s_z",
-            "s_s",
-            "frames",
-            "sidechain_frames",
-            "unnormalized_angles",
-            "angles",
-            "positions",
-            "states",
-        ]
-    }
+        sys.stdout.flush()
+        structure = _my_trunk_forward(model.trunk, s_s_0, s_z_0, aa, position_ids, attention_mask, no_recycles=num_recycles)
+        print("Got structure")
+        structure = {
+            k: v
+            for k, v in structure.items()
+            if k
+            in [
+                "s_z",
+                "s_s",
+                "frames",
+                "sidechain_frames",
+                "unnormalized_angles",
+                "angles",
+                "positions",
+                "states",
+            ]
+        }
 
-    disto_logits = model.distogram_head(structure["s_z"])
-    disto_logits = (disto_logits + disto_logits.transpose(1, 2)) / 2
-    structure["distogram_logits"] = disto_logits
+        disto_logits = model.distogram_head(structure["s_z"])
+        disto_logits = (disto_logits + disto_logits.transpose(1, 2)) / 2
+        structure["distogram_logits"] = disto_logits
 
-    lm_logits = model.lm_head(structure["s_s"])
-    structure["lm_logits"] = lm_logits
-    print("Got logits")
+        lm_logits = model.lm_head(structure["s_s"])
+        structure["lm_logits"] = lm_logits
+        print("Got logits")
 
-    structure["aatype"] = aa
-    make_atom14_masks(structure)
-    for k in ["atom14_atom_exists", "atom37_atom_exists"]:
-        structure[k] *= attention_mask.unsqueeze(-1)
-    structure["residue_index"] = position_ids
+        structure["aatype"] = aa
+        make_atom14_masks(structure)
+        for k in ["atom14_atom_exists", "atom37_atom_exists"]:
+            structure[k] *= attention_mask.unsqueeze(-1)
+        structure["residue_index"] = position_ids
 
-    lddt_head = model.lddt_head(structure["states"]).reshape(structure["states"].shape[0], B, L, -1, model.lddt_bins)
-    plddt = categorical_lddt(lddt_head[-1], bins=model.lddt_bins)
-    structure["plddt"] = plddt
+        lddt_head = model.lddt_head(structure["states"]).reshape(structure["states"].shape[0], B, L, -1, model.lddt_bins)
+        plddt = categorical_lddt(lddt_head[-1], bins=model.lddt_bins)
+        structure["plddt"] = plddt
 
-    ptm_logits = model.ptm_head(structure["s_z"])
-    structure["ptm_logits"] = ptm_logits
-    # structure["ptm"] = compute_tm(ptm_logits, max_bin=31, no_bins=model.distogram_bins)
-    structure.update(compute_predicted_aligned_error(ptm_logits, max_bin=31, no_bins=model.distogram_bins))
-    print("Got everything")
+        structure['s_z'].requires_grad_(True)
+        structure['s_z'].retain_grad()
+        ptm_logits = model.ptm_head(structure["s_z"]).to(torch.float16)
+        ptm_logits.requires_grad_(True)
+        ptm_logits.retain_grad()
+        structure["ptm_logits"] = ptm_logits
+        # structure["ptm"] = compute_tm(ptm_logits, max_bin=31, no_bins=model.distogram_bins)
+        structure.update(compute_predicted_aligned_error(ptm_logits, max_bin=31, no_bins=model.distogram_bins))
+        print("Got everything")
 
-    return EsmForProteinFoldingOutput(**structure), embeddings
+        return EsmForProteinFoldingOutput(**structure)
+
+    outputs = checkpoint(model_body, esm_embeds, use_reentrant=False)
+    return outputs, esm_embeds
 
 
 if __name__ == '__main__':
