@@ -7,7 +7,8 @@ from transformers import AutoTokenizer, EsmForProteinFolding
 from transformers.models.esm.openfold_utils import make_atom14_masks, compute_tm, compute_predicted_aligned_error
 from transformers.models.esm.openfold_utils.protein import to_pdb, Protein as OFProtein
 from transformers.models.esm.openfold_utils.feats import atom14_to_atom37
-from transformers.models.esm.modeling_esmfold import categorical_lddt, EsmForProteinFoldingOutput
+from transformers.models.esm.modeling_esmfold import categorical_lddt, EsmForProteinFoldingOutput, EsmFoldingTrunk
+from transformers.utils import ContextManagers
 
 
 def get_esmfold():
@@ -78,6 +79,58 @@ def _my_esm_forward(model, esmaa):
     esm_hidden_states = encoder_outputs.hidden_states
     return {'hidden_states': esm_hidden_states, 'embedding_output': embedding_output}
 
+def _my_trunk_forward(trunk, seq_feats, pair_feats, true_aa, residx, mask, no_recycles):
+    device = seq_feats.device
+    s_s_0 = seq_feats
+    s_z_0 = pair_feats
+    if no_recycles is None:
+        no_recycles = trunk.config.max_recycles
+    else:
+        no_recycles += 1
+
+    def trunk_iter(s, z, residx, mask):
+        z = z + trunk.pairwise_positional_embedding(residx, mask=mask)
+
+        for block in trunk.blocks:
+            s, z = block(s, z, mask=mask, residue_index=residx, chunk_size=trunk.chunk_size)
+        return s,z
+
+    s_s = s_s_0
+    s_z = s_z_0
+    recycle_s = torch.zeros_like(s_s)
+    recycle_z = torch.zeros_like(s_z)
+    recycle_bins = torch.zeros(*s_z.shape[:-1], device=device, dtype=torch.int32)
+
+    for recycle_idx in range(no_recycles):
+        with ContextManagers([] if recycle_idx == no_recycles - 1 else [torch.no_grad()]):
+            recycle_s = trunk.recycle_s_norm(recycle_s.detach()).to(device)
+            recycle_z = trunk.recycle_z_norm(recycle_z.detach()).to(device)
+            recycle_z += trunk.recycle_disto(recycle_bins.detach()).to(device)
+
+            s_s, s_z = trunk_iter(s_s_0 + recycle_s, s_z_0 + recycle_z, residx, mask)
+
+            # === Structure module ===
+            structure = trunk.structure_module(
+                {"single": trunk.trunk2sm_s(s_s), "pair": trunk.trunk2sm_z(s_z)},
+                true_aa,
+                mask.float(),
+            )
+
+            recycle_s = s_s
+            recycle_z = s_z
+            # Distogram needs the N, CA, C coordinates, and bin constants same as alphafold.
+            recycle_bins = EsmFoldingTrunk.distogram(
+                structure["positions"][-1][:, :, :3],
+                3.375,
+                21.375,
+                trunk.recycle_bins,
+            )
+
+    structure["s_s"] = s_s
+    structure["s_z"] = s_z
+
+    return structure
+
 def my_forward(tokenizer, model, sequences):
     # tokenize inputs
     inputs = tokenizer(sequences, add_special_tokens=False, padding=True, return_tensors='pt')
@@ -130,8 +183,22 @@ def my_forward(tokenizer, model, sequences):
 
     if model.config.esmfold_config.embed_aa:
         s_s_0 += model.embedding(masked_aa)
+    print("Got s_s, s_z")
+    trunk_dt = model.trunk.trunk2sm_s.weight.dtype
+    # s_s_0 = s_s_0.to(dtype=trunk_dt)
+    # s_z_0 = s_z_0.to(dtype=trunk_dt)
+    # aa = aa.to(dtype=trunk_dt)
+    # position_ids = position_ids.to(dtype=trunk_dt)
+    # attention_mask = attention_mask.to(dtype=trunk_dt)
+    # print("s_s_0:", s_s_0.dtype)
+    # print("s_z_0:", s_z_0.dtype)
+    # print("trunk:", model.trunk.trunk2sm_s.weight.dtype)
+    # print("Recycles:", model.trunk.config.max_recycles)
+    # print(torch.cuda.memory_summary(device=model.device))
 
-    structure = model.trunk(s_s_0, s_z_0, aa, position_ids, attention_mask, no_recycles=num_recycles)
+    # structure = model.trunk(s_s_0, s_z_0, aa, position_ids, attention_mask, no_recycles=num_recycles)
+    structure = _my_trunk_forward(model.trunk, s_s_0, s_z_0, aa, position_ids, attention_mask, no_recycles=num_recycles)
+    print("Got structure")
     structure = {
         k: v
         for k, v in structure.items()
@@ -154,6 +221,7 @@ def my_forward(tokenizer, model, sequences):
 
     lm_logits = model.lm_head(structure["s_s"])
     structure["lm_logits"] = lm_logits
+    print("Got logits")
 
     structure["aatype"] = aa
     make_atom14_masks(structure)
@@ -169,6 +237,7 @@ def my_forward(tokenizer, model, sequences):
     structure["ptm_logits"] = ptm_logits
     structure["ptm"] = compute_tm(ptm_logits, max_bin=31, no_bins=model.distogram_bins)
     structure.update(compute_predicted_aligned_error(ptm_logits, max_bin=31, no_bins=model.distogram_bins))
+    print("Got everything")
 
     return EsmForProteinFoldingOutput(**structure), embeddings
 
