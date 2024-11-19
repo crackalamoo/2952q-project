@@ -94,18 +94,15 @@ def _my_rel_pos_forward(pairwise_pos_e, residue_index, mask=None):
 
 def _my_trunk_forward(trunk, seq_feats, pair_feats, true_aa, residx, mask, no_recycles):
     device = seq_feats.device
-    device2 = trunk.trunk2sm_s.weight.device
-    s_s_0 = seq_feats.to(device2)
-    s_z_0 = pair_feats.to(device2)
-    true_aa = true_aa.to(device2)
-    residx = residx.to(device2)
-    mask = mask.to(device2)
+    s_s_0 = seq_feats
+    s_z_0 = pair_feats
     if no_recycles is None:
         no_recycles = trunk.config.max_recycles
     else:
         no_recycles += 1
 
     def trunk_iter(s, z, residx, mask):
+        # z = z + trunk.pairwise_positional_embedding(residx, mask=mask)
         z = z + _my_rel_pos_forward(trunk.pairwise_positional_embedding, residx, mask=mask)
 
         for block in trunk.blocks:
@@ -116,13 +113,13 @@ def _my_trunk_forward(trunk, seq_feats, pair_feats, true_aa, residx, mask, no_re
     s_z = s_z_0
     recycle_s = torch.zeros_like(s_s)
     recycle_z = torch.zeros_like(s_z)
-    recycle_bins = torch.zeros(*s_z.shape[:-1], device=device2, dtype=torch.int32)
+    recycle_bins = torch.zeros(*s_z.shape[:-1], device=device, dtype=torch.int32)
 
     for recycle_idx in range(no_recycles):
         with ContextManagers([] if recycle_idx == no_recycles - 1 else [torch.no_grad()]):
-            recycle_s = trunk.recycle_s_norm(recycle_s.detach()).to(device2)
-            recycle_z = trunk.recycle_z_norm(recycle_z.detach()).to(device2)
-            recycle_z += trunk.recycle_disto(recycle_bins.detach()).to(device2)
+            recycle_s = trunk.recycle_s_norm(recycle_s.detach()).to(device)
+            recycle_z = trunk.recycle_z_norm(recycle_z.detach()).to(device)
+            recycle_z += trunk.recycle_disto(recycle_bins.detach()).to(device)
 
             s_s, s_z = trunk_iter(s_s_0 + recycle_s, s_z_0 + recycle_z, residx, mask)
 
@@ -143,11 +140,8 @@ def _my_trunk_forward(trunk, seq_feats, pair_feats, true_aa, residx, mask, no_re
                 trunk.recycle_bins,
             )
 
-    structure["s_s"] = s_s.to(device)
-    structure["s_z"] = s_z.to(device)
-    structure["positions"] = structure["positions"].to(device)
-    # for key in structure.keys():
-    #     structure[key] = structure[key].to(device)
+    structure["s_s"] = s_s
+    structure["s_z"] = s_z
 
     return structure
 
