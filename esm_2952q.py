@@ -79,6 +79,18 @@ def _my_esm_forward(model, esmaa):
     esm_hidden_states = encoder_outputs.hidden_states
     return {'hidden_states': esm_hidden_states, 'embedding_output': embedding_output}
 
+def _my_rel_pos_forward(pairwise_pos_e, residue_index, mask=None):
+    # ignore ValueErrors
+    diff = residue_index[:, None, :] - residue_index[:, :, None]
+    diff = diff.clamp(-pairwise_pos_e.bins, pairwise_pos_e.bins)
+    diff = diff + pairwise_pos_e.bins + 1
+    if mask is not None:
+        mask = mask[:, None, :] * mask[:, :, None]
+        diff[mask == False] = 0
+    diff = diff.to(torch.int32)
+    output = pairwise_pos_e.embedding(diff)
+    return output
+
 def _my_trunk_forward(trunk, seq_feats, pair_feats, true_aa, residx, mask, no_recycles):
     device = seq_feats.device
     s_s_0 = seq_feats
@@ -89,7 +101,7 @@ def _my_trunk_forward(trunk, seq_feats, pair_feats, true_aa, residx, mask, no_re
         no_recycles += 1
 
     def trunk_iter(s, z, residx, mask):
-        z = z + trunk.pairwise_positional_embedding(residx, mask=mask)
+        z = z + _my_rel_pos_forward(trunk.pairwise_positional_embedding, residx, mask=mask)
 
         for block in trunk.blocks:
             s, z = block(s, z, mask=mask, residue_index=residx, chunk_size=trunk.chunk_size)
@@ -185,16 +197,14 @@ def my_forward(tokenizer, model, sequences):
         s_s_0 += model.embedding(masked_aa)
     print("Got s_s, s_z")
     trunk_dt = model.trunk.trunk2sm_s.weight.dtype
-    # s_s_0 = s_s_0.to(dtype=trunk_dt)
-    # s_z_0 = s_z_0.to(dtype=trunk_dt)
+    s_s_0 = s_s_0.to(dtype=trunk_dt)
+    s_z_0 = s_z_0.to(dtype=trunk_dt)
     # aa = aa.to(dtype=trunk_dt)
-    # position_ids = position_ids.to(dtype=trunk_dt)
-    # attention_mask = attention_mask.to(dtype=trunk_dt)
-    # print("s_s_0:", s_s_0.dtype)
-    # print("s_z_0:", s_z_0.dtype)
-    # print("trunk:", model.trunk.trunk2sm_s.weight.dtype)
-    # print("Recycles:", model.trunk.config.max_recycles)
-    # print(torch.cuda.memory_summary(device=model.device))
+    position_ids = position_ids.to(dtype=trunk_dt)
+    attention_mask = attention_mask.to(dtype=trunk_dt)
+    print("s_s_0:", s_s_0.dtype)
+    print("trunk:", model.trunk.trunk2sm_s.weight.dtype)
+    print(torch.cuda.memory_summary(device=model.device))
 
     # structure = model.trunk(s_s_0, s_z_0, aa, position_ids, attention_mask, no_recycles=num_recycles)
     structure = _my_trunk_forward(model.trunk, s_s_0, s_z_0, aa, position_ids, attention_mask, no_recycles=num_recycles)
@@ -235,7 +245,7 @@ def my_forward(tokenizer, model, sequences):
 
     ptm_logits = model.ptm_head(structure["s_z"])
     structure["ptm_logits"] = ptm_logits
-    structure["ptm"] = compute_tm(ptm_logits, max_bin=31, no_bins=model.distogram_bins)
+    # structure["ptm"] = compute_tm(ptm_logits, max_bin=31, no_bins=model.distogram_bins)
     structure.update(compute_predicted_aligned_error(ptm_logits, max_bin=31, no_bins=model.distogram_bins))
     print("Got everything")
 
