@@ -1,6 +1,7 @@
 import os
 import sys
 import torch
+import time
 import esm_2952q as esm
 import uniprot
 
@@ -9,8 +10,11 @@ def get_trigger(tokenizer, model, seqs, device):
     # seqs = [seq[:100] for seq in seqs]
     trigger = 'G' * 5 # TODO: discover actual trigger
 
+    grads = []
     for seq in seqs:
         # with torch.no_grad():
+        print("sequence:", len(seq))
+        torch.cuda.empty_cache()
         with torch.cuda.amp.autocast():
             print(f"Memory before forward: {torch.cuda.memory_allocated() / 1e6} MB") 
             outputs, embeddings = esm.my_forward(tokenizer, model, [seq], trigger)
@@ -39,17 +43,29 @@ def get_trigger(tokenizer, model, seqs, device):
                 print(embeddings.shape)
                 emb_grad += torch.autograd.grad(sub_loss, embeddings, retain_graph=True)[0]
                 print(f"Memory after backward {j}: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
+                del sub_loss
+                del sub_error
         print("Loss:", loss)
         print(f"Memory after full backward: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
         print("embeddings grad:", emb_grad)
         print("embeddings grad:", emb_grad.shape)
+        emb_grad = emb_grad.detach().to('cpu')
+        grads.append(emb_grad)
+        del outputs
+        del error
+        del embeddings
 
+    with torch.no_grad():
+        print(f"Memory before no_grad forward: {torch.cuda.memory_allocated() / 1e6} MB") 
+        outputs, embeddings = esm.my_forward(tokenizer, model, [seqs[0]], trigger)
+        print(f"Memory after no_grad forward: {torch.cuda.memory_allocated() / 1e6} MB")
     pdb = esm.convert_outputs_to_pdb(outputs)
     esm.save_pdb(pdb, 'output_structure.pdb')
 
     return trigger
 
 if __name__ == '__main__':
+    start_time = time.time()
     tokenizer, model = esm.get_esmfold()
     device = torch.device('cuda')
     model = model.to(device)
@@ -65,10 +81,11 @@ if __name__ == '__main__':
     print(f"Memory after adjusting: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
 
     # seqs = esm.test_proteins
-    seqs = uniprot.read_seqs_list()[:2]
+    # seqs = uniprot.read_seqs_list()[:2]
+    seqs = uniprot.read_seqs_list()
     print([(seq, len(seq)) for seq in seqs])
 
     torch.cuda.empty_cache()
     trigger = get_trigger(tokenizer, model, seqs, device)
     print("Trigger:", trigger)
-    print("Done")
+    print(f"Done: {time.time() - start_time} s")
