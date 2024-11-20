@@ -25,6 +25,9 @@ def read_seqs_list():
 
 
 if __name__ == '__main__':
-    df = get_ecoli_seqs()
+    df = get_ecoli_seqs(min_len=5,max_len=100)
     save_seqs(df)
-    print(read_seqs_list())
+    seqs = read_seqs_list()
+    print(seqs)
+    print(len(seqs))
+

@@ -75,7 +75,7 @@ def _my_esm_embeds(model, esmaa, trigger_len=None):
     #     past_key_values_length=0
     # )
     # trigger_embeds = embedding_output
-    trigger_embeds.requires_grad_(True) # critical line here!
+    trigger_embeds.requires_grad_(True)
     trigger_embeds.retain_grad()
     embedding_output = torch.cat([start_embeds, trigger_embeds, eos_embed], dim=1)
     return embedding_output, trigger_embeds
@@ -212,7 +212,6 @@ def my_forward(tokenizer, model, sequences, trigger):
         # } model.compute_language_model_representations
 
         esm_s = esm_s.to(model.esm_s_combine.dtype)
-        # esm_s = esm_s.detach()
 
         esm_s = (model.esm_s_combine.softmax(0).unsqueeze(0) @ esm_s).squeeze(2)
         s_s_0 = model.esm_s_mlp(esm_s)
@@ -221,14 +220,6 @@ def my_forward(tokenizer, model, sequences, trigger):
         if model.config.esmfold_config.embed_aa:
             s_s_0 += model.embedding(masked_aa)
         print("Got s_s, s_z")
-        trunk_dt = model.trunk.trunk2sm_s.weight.dtype
-        s_s_0 = s_s_0.to(dtype=trunk_dt)
-        s_z_0 = s_z_0.to(dtype=trunk_dt)
-        # aa = aa.to(dtype=trunk_dt)
-        position_ids = position_ids.to(dtype=trunk_dt)
-        attention_mask = attention_mask.to(dtype=trunk_dt)
-        print("s_s_0:", s_s_0.dtype)
-        print("trunk:", model.trunk.trunk2sm_s.weight.dtype)
 
         sys.stdout.flush()
         structure = _my_trunk_forward(model.trunk, s_s_0, s_z_0, aa, position_ids, attention_mask, no_recycles=num_recycles)
@@ -280,7 +271,7 @@ def my_forward(tokenizer, model, sequences, trigger):
     # outputs = checkpoint(model_body, esm_embeds, use_reentrant=False)
     outputs = model_body(esm_embeds)
     # print("REQ:", esm_embeds.requires_grad)
-    # esm_embeds.requires_grad_(False)
+    esm_embeds = esm_embeds.detach().to('cpu')
     return outputs, trigger_embeds
 
 
