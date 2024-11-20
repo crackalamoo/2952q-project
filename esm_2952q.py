@@ -276,6 +276,7 @@ def my_forward(tokenizer, model, sequences, trigger):
 
     # outputs = checkpoint(model_body, esm_embeds, use_reentrant=False)
     outputs = model_body(esm_embeds)
+    print("REQ:", esm_embeds.requires_grad)
     return outputs, trigger_embeds
 
 

@@ -21,6 +21,7 @@ def get_trigger(tokenizer, model, seqs, device):
     print(embeddings.shape)
     chunk_size = 10
     loss = 0
+    emb_grad = torch.zeros_like(embeddings)
     for i in range(error.size(0)):
         for j in range(0, error.size(1), chunk_size):
             sub_error = error[i, j:j+chunk_size, j:j+chunk_size]
@@ -35,14 +36,14 @@ def get_trigger(tokenizer, model, seqs, device):
             }
             torch.cuda.empty_cache()
             print(f"Memory after cleanup: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
-            sub_loss.backward(retain_graph=True)
+            # sub_loss.backward(retain_graph=True)
+            print(embeddings.shape)
+            emb_grad += torch.autograd.grad(sub_loss, embeddings, retain_graph=True)[0]
     print("Loss:", loss)
     print(f"Memory after backward: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
-    print("embeddings grad:", embeddings.grad)
-    print("embeddings grad:", embeddings.grad.shape)
-    # print("s_z grad:", outputs['s_z'].grad.shape)
-    # print("ptm_logits grad:", outputs['ptm_logits'].grad.shape)
-    # print("predicted_aligned_error grad:", outputs['predicted_aligned_error'].grad.shape)
+    # emb_grad = embeddings.grad
+    print("embeddings grad:", emb_grad)
+    print("embeddings grad:", emb_grad.shape)
 
     pdb = esm.convert_outputs_to_pdb(outputs)
     esm.save_pdb(pdb, 'output_structure.pdb')
