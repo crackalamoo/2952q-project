@@ -7,48 +7,46 @@ import uniprot
 
 def get_trigger(tokenizer, model, seqs, device):
     trigger = 'G' * 2 # TODO: discover actual trigger
-    trigger_seqs = [seq[:1] + trigger for seq in seqs]
+    trigger_seqs = [seq[:50] + trigger for seq in seqs]
 
 
-    from torch.cuda.amp import GradScaler
     # with torch.no_grad():
     with torch.cuda.amp.autocast():
         print(f"Memory before forward: {torch.cuda.memory_allocated() / 1e6} MB") 
         outputs, embeddings = esm.my_forward(tokenizer, model, trigger_seqs)
         print(f"Memory after forward: {torch.cuda.memory_allocated() / 1e6} MB")
 
-    # error = outputs.predicted_aligned_error[-1, :, :].to(torch.float16)
-    # error = torch.diag(error)
     error = outputs.predicted_aligned_error.to(torch.float16)
     error.retain_grad()
     error.requires_grad_(True)
-    scaler = GradScaler()
-    # error = outputs.predicted_aligned_error[-1, 0, 0].to(torch.float16)
     print(error.shape)
     print(embeddings)
     print(outputs['ptm_logits'])
-    loss = torch.mean(error)
+    chunk_size = 10
+    loss = 0
+    for i in range(error.size(0)):
+        for j in range(0, error.size(1), chunk_size):
+            sub_error = error[i, j:j+chunk_size, j:j+chunk_size]
+            sub_error = torch.diag(sub_error)
+            print(sub_error.shape)
+            sub_loss = torch.mean(sub_error)
+            loss += sub_loss.item()
+            print(f"Memory before backward: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
+            outputs = {
+                k: v.detach() if k not in ['predicted_aligned_error', 'ptm_logits', 's_z'] else v
+                for k, v in outputs.items()
+            }
+            # outputs['predicted_aligned_error'].retain_grad()
+            torch.cuda.empty_cache()
+            print(f"Memory after cleanup: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
+            sub_loss.backward(retain_graph=True)
     print("Loss:", loss)
-    print(f"Memory before backward: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
-    outputs = {
-        k: v.detach() if k not in ['predicted_aligned_error', 'ptm_logits', 's_z', 's_s'] else v
-        for k, v in outputs.items()
-    }
-    outputs['predicted_aligned_error'].retain_grad()
-    torch.cuda.empty_cache()
-    print(f"Memory after cleanup: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
-    loss.backward()
-    # scaler.scale(loss).backward()
-    # torch.autograd.grad(scaler.scale(loss), embeddings, create_graph=True, retain_graph=True, allow_unused=True)
-    # torch.autograd.grad(loss, outputs['predicted_aligned_error'], create_graph=False, retain_graph=False, allow_unused=True)
-    # scaler.unscale_(None)
     print(f"Memory after backward: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
-    scale = scaler.get_scale()
-    print("embeddings grad:", embeddings.grad) # None
-    print("s_z grad:", outputs['s_z'].grad / scale) # not None
-    print("ptm_logits grad:", outputs['ptm_logits'].grad / scale) # not None
-    print("predicted_aligned_error grad:", outputs['predicted_aligned_error'].grad / scale) # not None
-    # print(grads[0] / scaler.get_scale())
+    print("embeddings grad:", embeddings.grad)
+    print("embeddings grad:", embeddings.grad.shape)
+    print("s_z grad:", outputs['s_z'].grad.shape)
+    print("ptm_logits grad:", outputs['ptm_logits'].grad.shape)
+    # print("predicted_aligned_error grad:", outputs['predicted_aligned_error'].grad.shape)
 
 
     pdb = esm.convert_outputs_to_pdb(outputs)
