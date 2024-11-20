@@ -22,6 +22,7 @@ def get_esmfold():
 test_proteins = [
     "MGAGASAEEKHSRELEKKLKEDAEKDARTVKLLLLGAGESGKSTIVKQMKIIHQDGYSLEECLEFIAIIYGNTLQSILAIVRAMTTLNIQYGDSARQDDARKLMHMADTIEEGTMPKEMSDIIQRLWKDSGIQACFERASEYQLNDSAGYYLSDLERLVTPGYVPTEQDVLRSRVKTTGIIETQFSFKDLNFRMFDVGGQRSERKKWIHCFEGVTCIIFIAALSAYDMVLVEDDEVNRMHESLHLFNSICNHRYFATTSIVLFLNKKDVFFEKIKKAHLSICFPDYDGPNTYEDAGNYIKVQFLELNMRRDVKEIYSHMTCATDTQNVKFVFDAVTDIIIKENLKDCGLF" # human GNAT1
 ]
+aa = ['A','R','N','D','C','Q','E','G','H','I','L','K','M','F','P','S','T','W','Y','V']
 
 
 def convert_outputs_to_pdb(outputs):
@@ -164,6 +165,37 @@ def _my_trunk_forward(trunk, seq_feats, pair_feats, true_aa, residx, mask, no_re
 
     return structure
 
+def tokenize_and_embed(tokenizer, model, sequences, add_special_tokens=False):
+    inputs = tokenizer(sequences, add_special_tokens=False, padding=True, return_tensors='pt')
+    input_ids = inputs.input_ids.to(model.device)
+    attention_mask = inputs.attention_mask.to(model.device)
+
+    # generate constants and position ids
+    aa = input_ids
+    B = aa.shape[0]
+    L = aa.shape[1]
+    device = input_ids.device
+    if attention_mask is None:
+        attention_mask = torch.ones_like(aa, device=device)
+    position_ids = torch.arange(L, device=device).expand_as(input_ids)
+
+    # convert indices to esm
+    esmaa = model.af2_idx_to_esm_idx(aa, attention_mask) # esm amino acids
+    masked_aa = aa
+
+    # add bos and eos tokens
+    bosi, eosi = model.esm_dict_cls_idx, model.esm_dict_eos_idx
+    bos = esmaa.new_full((B, 1), bosi)
+    eos = esmaa.new_full((B, 1), model.esm_dict_padding_idx)
+    esmaa = torch.cat([bos, esmaa, eos], dim=1)
+    # use the first padding index as eos during inference
+    esmaa[range(B), (esmaa != 1).sum(1)] = eosi
+
+    esm_embeds, _ = _my_esm_embeds(model, esmaa)
+    if not add_special_tokens:
+        esm_embeds = esm_embeds[:, 1:-1, :]
+    return esm_embeds
+
 def my_forward(tokenizer, model, sequences, trigger):
     # tokenize inputs
     trigger_seqs = [seq + trigger for seq in sequences]
@@ -187,9 +219,6 @@ def my_forward(tokenizer, model, sequences, trigger):
     masked_aa = aa
 
     # model.compute_language_model_representations(esmaa) {
-    if model.esm.config.esmfold_config.bypass_lm:
-        assert False
-
     # add bos and eos tokens
     bosi, eosi = model.esm_dict_cls_idx, model.esm_dict_eos_idx
     bos = esmaa.new_full((B, 1), bosi)
