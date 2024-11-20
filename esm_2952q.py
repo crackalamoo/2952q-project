@@ -51,19 +51,33 @@ def save_pdb(pdb, fname):
     with open(f"{home_dir}/scratch/bio-out/{fname}", "w+") as f:
         f.write(pdb[0])
 
-def _my_esm_embeds(model, esmaa):
+def _my_esm_embeds(model, esmaa, trigger_len=None):
+    if trigger_len is None:
+        trigger_len = esmaa.shape[1]-2
     input_shape = esmaa.size()
     attention_mask = esmaa != 1
-    embedding_output = model.esm.embeddings(
-        input_ids=esmaa,
-        position_ids=None,
-        attention_mask=attention_mask,
-        inputs_embeds=None,
-        past_key_values_length=0
-    )
-    embedding_output.requires_grad_(True) # critical line here!
-    embedding_output.retain_grad()
-    return embedding_output
+    def get_emb(a, b):
+        return model.esm.embeddings(
+            input_ids=esmaa[:, a:b],
+            position_ids=None,
+            attention_mask=attention_mask[:, a:b],
+            inputs_embeds=None,
+            past_key_values_length=0
+        )
+    start_embeds = get_emb(0, -trigger_len-1)
+    trigger_embeds = get_emb(-trigger_len-1, -1)
+    eos_embed = get_emb(-1, esmaa.shape[1])
+    # embedding_output = model.esm.embeddings(
+    #     input_ids=esmaa,
+    #     position_ids=None,
+    #     attention_mask=attention_mask,
+    #     inputs_embeds=None,
+    #     past_key_values_length=0
+    # )
+    trigger_embeds.requires_grad_(True) # critical line here!
+    trigger_embeds.retain_grad()
+    embedding_output = torch.cat([start_embeds, trigger_embeds, eos_embed], dim=1)
+    return embedding_output, trigger_embeds
 def _my_esm_forward(model, esmaa, embedding_output):
     input_shape = esmaa.size()
     attention_mask = esmaa != 1
@@ -107,7 +121,6 @@ def _my_trunk_forward(trunk, seq_feats, pair_feats, true_aa, residx, mask, no_re
         no_recycles += 1
 
     def trunk_iter(s, z, residx, mask):
-        # z = z + trunk.pairwise_positional_embedding(residx, mask=mask)
         z = z + _my_rel_pos_forward(trunk.pairwise_positional_embedding, residx, mask=mask)
 
         for block in trunk.blocks:
@@ -122,9 +135,6 @@ def _my_trunk_forward(trunk, seq_feats, pair_feats, true_aa, residx, mask, no_re
 
     for recycle_idx in range(no_recycles):
         with ContextManagers([] if recycle_idx == no_recycles - 1 else [torch.no_grad()]):
-            # recycle_s = trunk.recycle_s_norm(recycle_s.detach()).to(device)
-            # recycle_z = trunk.recycle_z_norm(recycle_z.detach()).to(device)
-            # recycle_z += trunk.recycle_disto(recycle_bins.detach()).to(device)
             recycle_s = trunk.recycle_s_norm(recycle_s)
             recycle_z = trunk.recycle_z_norm(recycle_z)
             recycle_z += trunk.recycle_disto(recycle_bins)
@@ -153,9 +163,10 @@ def _my_trunk_forward(trunk, seq_feats, pair_feats, true_aa, residx, mask, no_re
 
     return structure
 
-def my_forward(tokenizer, model, sequences):
+def my_forward(tokenizer, model, sequences, trigger):
     # tokenize inputs
-    inputs = tokenizer(sequences, add_special_tokens=False, padding=True, return_tensors='pt')
+    trigger_seqs = [seq[:40] + trigger for seq in sequences]
+    inputs = tokenizer(trigger_seqs, add_special_tokens=False, padding=True, return_tensors='pt')
     input_ids = inputs.input_ids.to(model.device)
     attention_mask = inputs.attention_mask.to(model.device)
     num_recycles = None
@@ -174,7 +185,6 @@ def my_forward(tokenizer, model, sequences):
     esmaa = model.af2_idx_to_esm_idx(aa, attention_mask) # esm amino acids
     masked_aa = aa
 
-    # esm_s = model.compute_language_model_representations(esmaa)
     # model.compute_language_model_representations(esmaa) {
     if model.esm.config.esmfold_config.bypass_lm:
         assert False
@@ -187,7 +197,7 @@ def my_forward(tokenizer, model, sequences):
     # use the first padding index as eos during inference
     esmaa[range(B), (esmaa != 1).sum(1)] = eosi
 
-    esm_embeds = _my_esm_embeds(model, esmaa)
+    esm_embeds, trigger_embeds = _my_esm_embeds(model, esmaa, trigger_len=len(trigger))
     def model_body(embeds):
         nonlocal position_ids
         nonlocal attention_mask
@@ -256,11 +266,7 @@ def my_forward(tokenizer, model, sequences):
         plddt = categorical_lddt(lddt_head[-1], bins=model.lddt_bins)
         structure["plddt"] = plddt
 
-        structure['s_z'].requires_grad_(True)
-        structure['s_z'].retain_grad()
         ptm_logits = model.ptm_head(structure["s_z"]).to(torch.float16)
-        ptm_logits.requires_grad_(True)
-        ptm_logits.retain_grad()
         structure["ptm_logits"] = ptm_logits
         # structure["ptm"] = compute_tm(ptm_logits, max_bin=31, no_bins=model.distogram_bins)
         structure.update(compute_predicted_aligned_error(ptm_logits, max_bin=31, no_bins=model.distogram_bins))
@@ -268,8 +274,9 @@ def my_forward(tokenizer, model, sequences):
 
         return EsmForProteinFoldingOutput(**structure)
 
-    outputs = checkpoint(model_body, esm_embeds, use_reentrant=False)
-    return outputs, esm_embeds
+    # outputs = checkpoint(model_body, esm_embeds, use_reentrant=False)
+    outputs = model_body(esm_embeds)
+    return outputs, trigger_embeds
 
 
 if __name__ == '__main__':
