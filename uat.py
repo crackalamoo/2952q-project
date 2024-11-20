@@ -6,6 +6,7 @@ import uniprot
 
 
 def get_trigger(tokenizer, model, seqs, device):
+    seqs = [seq[:100] for seq in seqs]
     trigger = 'G' * 5 # TODO: discover actual trigger
 
     # with torch.no_grad():
@@ -15,8 +16,6 @@ def get_trigger(tokenizer, model, seqs, device):
         print(f"Memory after forward: {torch.cuda.memory_allocated() / 1e6} MB")
 
     error = outputs.predicted_aligned_error.to(torch.float16)
-    # error.retain_grad()
-    # error.requires_grad_(True)
     print(error.shape)
     print(embeddings.shape)
     chunk_size = 10
@@ -31,17 +30,16 @@ def get_trigger(tokenizer, model, seqs, device):
             loss += sub_loss.item()
             print(f"Memory before backward {j}: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
             outputs = {
-                k: v.detach() if k not in ['predicted_aligned_error', 'ptm_logits', 's_z'] else v
+                k: v.detach().to('cpu') if k not in ['predicted_aligned_error', 'ptm_logits', 's_z'] else v
                 for k, v in outputs.items()
             }
             torch.cuda.empty_cache()
             print(f"Memory after cleanup: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
-            # sub_loss.backward(retain_graph=True)
             print(embeddings.shape)
             emb_grad += torch.autograd.grad(sub_loss, embeddings, retain_graph=True)[0]
+            print(f"Memory after backward {j}: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
     print("Loss:", loss)
-    print(f"Memory after backward: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
-    # emb_grad = embeddings.grad
+    print(f"Memory after full backward: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
     print("embeddings grad:", emb_grad)
     print("embeddings grad:", emb_grad.shape)
 
@@ -54,12 +52,15 @@ if __name__ == '__main__':
     tokenizer, model = esm.get_esmfold()
     device = torch.device('cuda')
     model = model.to(device)
+    print(f"Memory after loading: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
 
     model.esm = model.esm.half()
     torch.backends.cuda.matmul.allow_tf32 = True
-    model.trunk.set_chunk_size(1)
-    model.trunk.config.max_recycles = 1
-    model.trunk = model.trunk.half()
+    model.trunk.set_chunk_size(32)
+    # model.trunk.config.max_recycles = 1
+    # model.trunk = model.trunk.half()
+    print(model.trunk.config.max_recycles) # 4
+    print(f"Memory after adjusting: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
 
     # seqs = esm.test_proteins
     seqs = uniprot.read_seqs_list()[:1]

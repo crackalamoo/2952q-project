@@ -74,6 +74,7 @@ def _my_esm_embeds(model, esmaa, trigger_len=None):
     #     inputs_embeds=None,
     #     past_key_values_length=0
     # )
+    # trigger_embeds = embedding_output
     trigger_embeds.requires_grad_(True) # critical line here!
     trigger_embeds.retain_grad()
     embedding_output = torch.cat([start_embeds, trigger_embeds, eos_embed], dim=1)
@@ -165,7 +166,7 @@ def _my_trunk_forward(trunk, seq_feats, pair_feats, true_aa, residx, mask, no_re
 
 def my_forward(tokenizer, model, sequences, trigger):
     # tokenize inputs
-    trigger_seqs = [seq[:40] + trigger for seq in sequences]
+    trigger_seqs = [seq + trigger for seq in sequences]
     inputs = tokenizer(trigger_seqs, add_special_tokens=False, padding=True, return_tensors='pt')
     input_ids = inputs.input_ids.to(model.device)
     attention_mask = inputs.attention_mask.to(model.device)
@@ -272,11 +273,14 @@ def my_forward(tokenizer, model, sequences, trigger):
         structure.update(compute_predicted_aligned_error(ptm_logits, max_bin=31, no_bins=model.distogram_bins))
         print("Got everything")
 
+        esm_s = esm_s.detach().to('cpu')
+
         return EsmForProteinFoldingOutput(**structure)
 
     # outputs = checkpoint(model_body, esm_embeds, use_reentrant=False)
     outputs = model_body(esm_embeds)
-    print("REQ:", esm_embeds.requires_grad)
+    # print("REQ:", esm_embeds.requires_grad)
+    # esm_embeds.requires_grad_(False)
     return outputs, trigger_embeds
 
 
