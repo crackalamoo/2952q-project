@@ -248,11 +248,11 @@ def my_forward(tokenizer, model, sequences, trigger):
 
         if model.config.esmfold_config.embed_aa:
             s_s_0 += model.embedding(masked_aa)
-        print("Got s_s, s_z")
+        # print("Got s_s, s_z")
 
         sys.stdout.flush()
         structure = _my_trunk_forward(model.trunk, s_s_0, s_z_0, aa, position_ids, attention_mask, no_recycles=num_recycles)
-        print("Got structure")
+        # print("Got structure")
         structure = {
             k: v
             for k, v in structure.items()
@@ -275,7 +275,7 @@ def my_forward(tokenizer, model, sequences, trigger):
 
         lm_logits = model.lm_head(structure["s_s"])
         structure["lm_logits"] = lm_logits
-        print("Got logits")
+        # print("Got logits")
 
         structure["aatype"] = aa
         make_atom14_masks(structure)
@@ -291,7 +291,7 @@ def my_forward(tokenizer, model, sequences, trigger):
         structure["ptm_logits"] = ptm_logits
         # structure["ptm"] = compute_tm(ptm_logits, max_bin=31, no_bins=model.distogram_bins)
         structure.update(compute_predicted_aligned_error(ptm_logits, max_bin=31, no_bins=model.distogram_bins))
-        print("Got everything")
+        # print("Got everything")
 
         esm_s = esm_s.detach().to('cpu')
 
