@@ -9,14 +9,15 @@ import uniprot
 def get_trigger(tokenizer, model, seqs, steps, device):
     # seqs = [seq[:100] for seq in seqs]
     trigger = 'G' * 10 # initial trigger, will be updated
+    view_seq = 6
 
     aa_emb = esm.tokenize_and_embed(tokenizer, model, esm.aa).to('cpu')
     print(aa_emb.shape)
     chunk_size = 9
     with torch.no_grad():
 
-        print("Sequence from database:", seqs[0])
-        outputs, _ = esm.my_forward(tokenizer, model, [seqs[0]], '')
+        print("Sequence from database:", seqs[view_seq])
+        outputs, _ = esm.my_forward(tokenizer, model, [seqs[view_seq]], '')
         pdb = esm.convert_outputs_to_pdb(outputs)
         esm.save_pdb(pdb, 'output_structure.pdb')
 
@@ -33,7 +34,7 @@ def get_trigger(tokenizer, model, seqs, steps, device):
                 del sub_error
                 del sub_loss
             avg_loss += loss
-            if i == 0:
+            if i == view_seq:
                 print("Initial sequence:", seq, trigger)
                 pdb = esm.convert_outputs_to_pdb(outputs)
                 esm.save_pdb(pdb, 'initial_structure.pdb')
@@ -119,7 +120,7 @@ def get_trigger(tokenizer, model, seqs, steps, device):
                 del sub_error
                 del sub_loss
             avg_loss += loss
-            if i == 0:
+            if i == view_seq:
                 print("Final sequence:", seq, trigger)
                 pdb = esm.convert_outputs_to_pdb(outputs)
                 esm.save_pdb(pdb, 'final_structure.pdb')
@@ -150,6 +151,6 @@ if __name__ == '__main__':
     print([(seq, len(seq)) for seq in seqs])
 
     torch.cuda.empty_cache()
-    trigger = get_trigger(tokenizer, model, seqs, 2, device)
+    trigger = get_trigger(tokenizer, model, seqs, 4, device)
     print("Trigger:", trigger)
     print(f"Done: {time.time() - start_time} s")
