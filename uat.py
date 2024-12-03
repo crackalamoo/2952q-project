@@ -6,7 +6,18 @@ import esm_2952q as esm
 import uniprot
 
 
-def get_trigger(tokenizer, model, seqs, steps, device):
+def get_trigger(tokenizer, model, df, steps, device):
+    seqs = df['Sequence'].tolist()
+    entries = df['Entry'].tolist()
+    home_dir = os.environ['HOME']
+    for i in reversed(range(len(entries))):
+        if os.path.exists(f'{home_dir}/scratch/bio-out/rcsb/{entries[i]}.pdb'):
+            print(f"keeping {entries[i]}")
+        else:
+            print(f"deleting {entries[i]}")
+            seqs.pop(i)
+            entries.pop(i)
+    print([(seq, len(seq)) for seq in seqs], len(seqs))
     # seqs = [seq[:100] for seq in seqs]
     trigger = 'G' * 10 # initial trigger, will be updated
     view_seq = 6
@@ -45,14 +56,14 @@ def get_trigger(tokenizer, model, seqs, steps, device):
         grad = None
         print(f"STEP {step+1}/{steps}")
         avg_loss = 0
-        for seq in seqs:
+        for i, seq in enumerate(seqs):
             # with torch.no_grad():
-            print("sequence len:", len(seq))
+            # print("sequence len:", len(seq))
             torch.cuda.empty_cache()
             with torch.cuda.amp.autocast():
-                print(f"Memory before forward: {torch.cuda.memory_allocated() / 1e6} MB") 
+                # print(f"Memory before forward: {torch.cuda.memory_allocated() / 1e6} MB") 
                 outputs, trigger_embeds = esm.my_forward(tokenizer, model, [seq], trigger)
-                print(f"Memory after forward: {torch.cuda.memory_allocated() / 1e6} MB")
+                # print(f"Memory after forward: {torch.cuda.memory_allocated() / 1e6} MB")
 
             error = outputs.predicted_aligned_error.to(torch.float16)
             # print(error.shape)
@@ -72,14 +83,18 @@ def get_trigger(tokenizer, model, seqs, steps, device):
                     for k, v in outputs.items()
                 }
                 torch.cuda.empty_cache()
+                if i == view_seq and j == 0:
+                    print(outputs.keys())
+                    print(outputs['positions'].shape)
+                    print(outputs['atom14_atom_exists'].shape)
                 # print(f"Memory after cleanup: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
                 # print(trigger_embeds.shape)
                 emb_grad += torch.autograd.grad(sub_loss, trigger_embeds, retain_graph=True)[0]
                 # print(f"Memory after backward {j}: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
                 del sub_loss
                 del sub_error
-            print("Loss:", loss)
-            print(f"Memory after full backward: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
+            # print("Loss:", loss)
+            # print(f"Memory after full backward: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
             emb_grad = emb_grad.detach().to('cpu')[0, :, :] # trigger_len x dim
             grad = emb_grad if grad is None else grad + emb_grad
             del outputs
@@ -145,12 +160,9 @@ if __name__ == '__main__':
     # model.trunk.config.max_recycles = 6
     print(f"Memory after adjusting: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
 
-    # seqs = esm.test_proteins
-    seqs = uniprot.read_seqs_list()
-    # seqs = seqs[1:2]
-    print([(seq, len(seq)) for seq in seqs])
+    df = uniprot.read_seqs_df()
 
     torch.cuda.empty_cache()
-    trigger = get_trigger(tokenizer, model, seqs, 4, device)
+    trigger = get_trigger(tokenizer, model, df, 16, device)
     print("Trigger:", trigger)
     print(f"Done: {time.time() - start_time} s")

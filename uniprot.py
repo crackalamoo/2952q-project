@@ -20,9 +20,10 @@ def get_ecoli_seqs(min_len=128, max_len=512):
 def save_seqs(df):
     df.to_csv('~/scratch/bio-out/seqs-df.csv', compression='gzip', sep='\t')
 
-def read_seqs_list():
+def read_seqs_df():
     df = pd.read_csv('~/scratch/bio-out/seqs-df.csv', compression='gzip', sep='\t')
-    return df['Sequence'].tolist()
+    # return df['Sequence'].tolist()
+    return df
 
 def rcsb_sequence(uniprot_id):
     uniprot_data = requests.get(f"https://rest.uniprot.org/uniprotkb/search?query={uniprot_id}&fields=structure_3d").json()
