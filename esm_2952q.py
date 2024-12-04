@@ -58,8 +58,11 @@ def pdb_to_atom14(fname, sname=None):
     parser = Bio.PDB.PDBParser()
     structure = parser.get_structure(sname, f"{home_dir}/scratch/bio-out/{fname}")
     coords = []
-    for atom in structure.get_atoms():
-        coords.append(atom.get_coord())
+    for model in structure.get_models():
+        for atom in model.get_atoms():
+            if atom.element != 'H':
+                coords.append(atom.get_coord())
+        break
     coords = np.array(coords)
     return coords
 
@@ -313,35 +316,40 @@ def my_forward(tokenizer, model, sequences, trigger):
 
 
 if __name__ == '__main__':
-    tokenizer, model = get_esmfold()
-
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    model = model.to(device)
-
-    model.esm = model.esm.half()
-
-    torch.backends.cuda.matmul.allow_tf32 = True
-    model.trunk.set_chunk_size(64)
-
     df = uniprot.read_seqs_df()
-    seqs = [df['Sequence'][3]]
-    print(f"modeling {df['Entry'][3]}")
+    print(df['Entry'].tolist())
+    SEQ_NUM = 7
+    seqs = [df['Sequence'][SEQ_NUM]]
+    entry = df['Entry'][SEQ_NUM]
+    print(f"modeling {entry}")
 
-    tokenized_input = tokenizer(test_proteins, return_tensors="pt", add_special_tokens=False)['input_ids']
-    tokenized_input = tokenized_input.to(device)
+    RUN_INFERENCE = False
+    if RUN_INFERENCE:
+        tokenizer, model = get_esmfold()
 
-    with torch.no_grad():
-        outputs = model(tokenized_input)
-    print(outputs['positions'][-1])
-    print(outputs['positions'][-1].shape)
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        model = model.to(device)
 
-    pdb = convert_outputs_to_pdb(outputs)
-    save_pdb(pdb, 'output_structure.pdb')
+        model.esm = model.esm.half()
+
+        torch.backends.cuda.matmul.allow_tf32 = True
+        model.trunk.set_chunk_size(64)
+
+        tokenized_input = tokenizer(seqs, return_tensors="pt", add_special_tokens=False)['input_ids']
+        tokenized_input = tokenized_input.to(device)
+
+        with torch.no_grad():
+            outputs = model(tokenized_input)
+        print(outputs['positions'][-1])
+        print(outputs['positions'][-1].shape)
+
+        pdb = convert_outputs_to_pdb(outputs)
+        save_pdb(pdb, 'output_structure.pdb')
 
     coords = pdb_to_atom14('output_structure.pdb')
     print(coords)
     print(coords.shape)
-    coords0 = pdb_to_atom14(f"rcsb/{df['Entry'][3]}.pdb")
+    coords0 = pdb_to_atom14(f"rcsb/{entry}.pdb")
     print(coords0.shape)
 
     print("Done")
