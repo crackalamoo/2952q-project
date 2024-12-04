@@ -1,7 +1,7 @@
 import requests
 from io import BytesIO
 import pandas as pd
-from esm_2952q import save_pdb
+# from esm_2952q import save_pdb
 
 def get_monomers(taxonomy_id, min_len, max_len):
     uniprot_url = f"https://rest.uniprot.org/uniprotkb/stream?compressed=true&fields=accession%2Csequence&format=tsv&query=%28%28taxonomy_id%3A{taxonomy_id}%29%20AND%20%28reviewed%3Atrue%29%20AND%20%28length%3A%5B{min_len}%20TO%20{max_len}%5D%29%20AND%20%28cc_subunit%3Amonomer%29%29"
@@ -11,6 +11,11 @@ def get_monomers(taxonomy_id, min_len, max_len):
     df = pd.read_csv(bio, compression='gzip', sep='\t')
     df = df.dropna()
     return df
+
+def save_pdb(pdb, fname):
+    home_dir = os.environ['HOME']
+    with open(f"{home_dir}/scratch/bio-out/{fname}", "w+") as f:
+        f.write(pdb[0])
 
 def get_ecoli_seqs(min_len=128, max_len=512):
     taxonomy_id = 83333

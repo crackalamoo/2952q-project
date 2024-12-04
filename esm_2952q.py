@@ -5,7 +5,7 @@ import sys
 import torch
 import numpy as np
 
-import uniprot
+from uniprot import read_seqs_df
 
 from torch.utils.checkpoint import checkpoint
 
@@ -50,7 +50,7 @@ def convert_outputs_to_pdb(outputs):
         pdbs.append(to_pdb(pred))
     return pdbs
 
-def pdb_to_atom14(fname, sname=None):
+def pdb_to_atom14(fname, seq, sname=None):
     home_dir = os.environ['HOME']
     import Bio.PDB
     if sname is None:
@@ -59,17 +59,19 @@ def pdb_to_atom14(fname, sname=None):
     structure = parser.get_structure(sname, f"{home_dir}/scratch/bio-out/{fname}")
     coords = []
     for model in structure.get_models():
-        for atom in model.get_atoms():
-            if atom.element != 'H':
-                coords.append(atom.get_coord())
-        break
+        for chain in model.get_chains():
+            for i, residue in enumerate(chain.get_residues()):
+                if i == len(seq):
+                    break
+                # print(residue.get_resname())
+                for atom in residue.get_atoms():
+                    if atom.element != 'H':
+                        coords.append(atom.get_coord())
+            break # only one chain
+        break # only one model
     coords = np.array(coords)
     return coords
 
-def save_pdb(pdb, fname):
-    home_dir = os.environ['HOME']
-    with open(f"{home_dir}/scratch/bio-out/{fname}", "w+") as f:
-        f.write(pdb[0])
 
 def _my_esm_embeds(model, esmaa, trigger_len=None):
     if trigger_len is None:
@@ -316,7 +318,7 @@ def my_forward(tokenizer, model, sequences, trigger):
 
 
 if __name__ == '__main__':
-    df = uniprot.read_seqs_df()
+    df = read_seqs_df()
     print(df['Entry'].tolist())
     SEQ_NUM = 7
     seqs = [df['Sequence'][SEQ_NUM]]
@@ -346,10 +348,10 @@ if __name__ == '__main__':
         pdb = convert_outputs_to_pdb(outputs)
         save_pdb(pdb, 'output_structure.pdb')
 
-    coords = pdb_to_atom14('output_structure.pdb')
+    coords = pdb_to_atom14('output_structure.pdb', seqs[0])
     print(coords)
     print(coords.shape)
-    coords0 = pdb_to_atom14(f"rcsb/{entry}.pdb")
+    coords0 = pdb_to_atom14(f"rcsb/{entry}.pdb", seqs[0])
     print(coords0.shape)
 
     print("Done")
