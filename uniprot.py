@@ -39,7 +39,7 @@ def rcsb_sequence(uniprot_id):
 if __name__ == '__main__':
     df = get_ecoli_seqs(min_len=5,max_len=100)
     save_seqs(df)
-    seqs = read_seqs_list()
+    seqs = df['Sequence'].tolist()
     print(seqs)
     print(len(seqs))
 

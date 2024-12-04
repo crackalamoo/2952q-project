@@ -3,6 +3,9 @@ os.environ['HF_HOME'] = '~/scratch/huggingface'
 
 import sys
 import torch
+import numpy as np
+
+import uniprot
 
 from torch.utils.checkpoint import checkpoint
 
@@ -47,6 +50,19 @@ def convert_outputs_to_pdb(outputs):
         pdbs.append(to_pdb(pred))
     return pdbs
 
+def pdb_to_atom14(fname, sname=None):
+    home_dir = os.environ['HOME']
+    import Bio.PDB
+    if sname is None:
+        sname = fname[:fname.rfind('.')]
+    parser = Bio.PDB.PDBParser()
+    structure = parser.get_structure(sname, f"{home_dir}/scratch/bio-out/{fname}")
+    coords = []
+    for atom in structure.get_atoms():
+        coords.append(atom.get_coord())
+    coords = np.array(coords)
+    return coords
+
 def save_pdb(pdb, fname):
     home_dir = os.environ['HOME']
     with open(f"{home_dir}/scratch/bio-out/{fname}", "w+") as f:
@@ -68,14 +84,6 @@ def _my_esm_embeds(model, esmaa, trigger_len=None):
     start_embeds = get_emb(0, -trigger_len-1)
     trigger_embeds = get_emb(-trigger_len-1, -1)
     eos_embed = get_emb(-1, esmaa.shape[1])
-    # embedding_output = model.esm.embeddings(
-    #     input_ids=esmaa,
-    #     position_ids=None,
-    #     attention_mask=attention_mask,
-    #     inputs_embeds=None,
-    #     past_key_values_length=0
-    # )
-    # trigger_embeds = embedding_output
     trigger_embeds.requires_grad_(True)
     trigger_embeds.retain_grad()
     embedding_output = torch.cat([start_embeds, trigger_embeds, eos_embed], dim=1)
@@ -315,14 +323,25 @@ if __name__ == '__main__':
     torch.backends.cuda.matmul.allow_tf32 = True
     model.trunk.set_chunk_size(64)
 
+    df = uniprot.read_seqs_df()
+    seqs = [df['Sequence'][3]]
+    print(f"modeling {df['Entry'][3]}")
+
     tokenized_input = tokenizer(test_proteins, return_tensors="pt", add_special_tokens=False)['input_ids']
     tokenized_input = tokenized_input.to(device)
 
     with torch.no_grad():
         outputs = model(tokenized_input)
-    print(outputs)
+    print(outputs['positions'][-1])
+    print(outputs['positions'][-1].shape)
 
     pdb = convert_outputs_to_pdb(outputs)
     save_pdb(pdb, 'output_structure.pdb')
+
+    coords = pdb_to_atom14('output_structure.pdb')
+    print(coords)
+    print(coords.shape)
+    coords0 = pdb_to_atom14(f"rcsb/{df['Entry'][3]}.pdb")
+    print(coords0.shape)
 
     print("Done")

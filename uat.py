@@ -85,7 +85,7 @@ def get_trigger(tokenizer, model, df, steps, device):
                 torch.cuda.empty_cache()
                 if i == view_seq and j == 0:
                     print(outputs.keys())
-                    print(outputs['positions'].shape)
+                    print(outputs['positions'][-1].shape)
                     print(outputs['atom14_atom_exists'].shape)
                 # print(f"Memory after cleanup: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
                 # print(trigger_embeds.shape)
@@ -165,4 +165,14 @@ if __name__ == '__main__':
     torch.cuda.empty_cache()
     trigger = get_trigger(tokenizer, model, df, 16, device)
     print("Trigger:", trigger)
-    print(f"Done: {time.time() - start_time} s")
+    seconds = time.time() - start_time
+    minutes = int(seconds / 60)
+    seconds %= 60
+    time_s = f"{seconds} s"
+    hours = int(minutes / 60)
+    minutes %= 60
+    if minutes > 0:
+        time_s = f"{minutes} min {time_s}"
+    if hours > 0:
+        time_s = f"{hours} h {time_s}"
+    print(f"Done: {time_s}")
