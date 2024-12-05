@@ -1,3 +1,5 @@
+import os
+os.environ['HF_HOME'] = '~/scratch/huggingface'
 import requests
 from io import BytesIO
 import pandas as pd

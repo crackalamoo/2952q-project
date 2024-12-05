@@ -5,7 +5,7 @@ import sys
 import torch
 import numpy as np
 
-from uniprot import read_seqs_df
+from uniprot import read_seqs_df, save_pdb
 
 from torch.utils.checkpoint import checkpoint
 
@@ -50,7 +50,7 @@ def convert_outputs_to_pdb(outputs):
         pdbs.append(to_pdb(pred))
     return pdbs
 
-def pdb_to_atom14(fname, seq, sname=None, device=None):
+def pdb_to_atom14(fname, seq, sname=None, device=None, model_n=0):
     home_dir = os.environ['HOME']
     import Bio.PDB
     if sname is None:
@@ -58,15 +58,21 @@ def pdb_to_atom14(fname, seq, sname=None, device=None):
     parser = Bio.PDB.PDBParser()
     structure = parser.get_structure(sname, f"{home_dir}/scratch/bio-out/{fname}")
     coords = []
-    for model in structure.get_models():
+    print(seq)
+    for m, model in enumerate(structure.get_models()):
+        if m != model_n:
+            continue
         for chain in model.get_chains():
             for i, residue in enumerate(chain.get_residues()):
                 if i == len(seq):
                     break
                 # print(residue.get_resname())
+                n_atoms = 0
                 for atom in residue.get_atoms():
                     if atom.element != 'H':
+                        n_atoms += 1
                         coords.append(atom.get_coord())
+                print(residue.get_resname(), n_atoms)
             break # only one chain
         break # only one model
     coords = torch.tensor(coords, device=device)
@@ -376,7 +382,6 @@ if __name__ == '__main__':
     print(coords)
     print(coords.shape)
     coords0 = pdb_to_atom14(f"rcsb/{entry}.pdb", seqs[0])
-    # coords0 = coords0 - coords0.mean(dim=0)
     print(coords0.shape)
     print("RMSD naive:", compute_rmsd(coords, coords0))
 
