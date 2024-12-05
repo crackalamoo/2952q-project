@@ -50,7 +50,7 @@ def convert_outputs_to_pdb(outputs):
         pdbs.append(to_pdb(pred))
     return pdbs
 
-def pdb_to_atom14(fname, sname=None, device=None, model_n=0):
+def pdb_to_atom14(fname, sname=None, device=None, model_n=0, residue_start=0):
     home_dir = os.environ['HOME']
     import Bio.PDB
     from Bio.SeqUtils import seq1
@@ -65,7 +65,7 @@ def pdb_to_atom14(fname, sname=None, device=None, model_n=0):
             continue
         for chain in model.get_chains():
             for i, residue in enumerate(chain.get_residues()):
-                if not residue.has_id('CA'):
+                if i < residue_start or not residue.has_id('CA'):
                     continue
                 seq += seq1(residue.get_resname())
                 n_atoms = 0
