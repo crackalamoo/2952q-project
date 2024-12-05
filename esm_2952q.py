@@ -73,17 +73,22 @@ def pdb_to_atom14(fname, seq, sname=None, device=None):
     return coords
 
 def kabsch_align(fixed, moving):
-    fixed_centered = fixed - fixed.mean(dim=0)
-    moving_centered = moving - moving.mean(dim=0)
+    fixed_center = fixed.mean(dim=0)
+    moving_center = moving.mean(dim=0)
+
+    fixed_centered = fixed - fixed_center
+    moving_centered = moving - moving_center
 
     cov = torch.mm(moving_centered.T, fixed_centered)
     U, S, Vt = torch.svd(cov)
 
-    d = torch.det(torch.mm(Vt.T, U.T))
-    D = torch.diag(torch.tensor([1.0, 1.0, d]))
-    rotation_matrix = torch.mm(torch.mm(Vt.T, D), U.T)
+    rotation_matrix = torch.mm(Vt.T, U.T)
+    if torch.det(rotation_matrix) < 0:
+        Vt[2] = -Vt[2]
+        rotation_matrix = torch.mm(Vt.T, U.T)
 
     aligned = torch.mm(moving_centered, rotation_matrix.T)
+    aligned = fixed_center + aligned
 
     return aligned, rotation_matrix
 
@@ -344,7 +349,7 @@ if __name__ == '__main__':
     entry = df['Entry'][SEQ_NUM]
     print(f"modeling {entry}")
 
-    RUN_INFERENCE = True
+    RUN_INFERENCE = False
     if RUN_INFERENCE:
         tokenizer, model = get_esmfold()
 
@@ -371,6 +376,7 @@ if __name__ == '__main__':
     print(coords)
     print(coords.shape)
     coords0 = pdb_to_atom14(f"rcsb/{entry}.pdb", seqs[0])
+    # coords0 = coords0 - coords0.mean(dim=0)
     print(coords0.shape)
     print("RMSD naive:", compute_rmsd(coords, coords0))
 
