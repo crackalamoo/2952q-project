@@ -18,12 +18,15 @@ if __name__ == '__main__':
     seq1 = prot1['Sequence'].iloc[0]
     entry1 = prot1['Entry'].iloc[0]
     print(seq1)
+    true1, seq1 = esm.pdb_to_atom14(f'rcsb/{entry1}.pdb')
+    print(seq1)
 
     # get sequence and model without MET
     prot2 = df[df['Entry'] == 'P0AC62']
     seq2 = prot2['Sequence'].iloc[0]
     entry2 = prot2['Entry'].iloc[0]
-    seq2 = seq2[1:] # remove MET
+    print(seq2)
+    true2, seq2 = esm.pdb_to_atom14(f'rcsb/{entry2}.pdb')
     print(seq2)
 
     if RUN_INFERENCE:
@@ -51,13 +54,11 @@ if __name__ == '__main__':
         pdb2 = esm.convert_outputs_to_pdb(outputs)
         uniprot.save_pdb(pdb2, f'met/{entry2}.pdb')
 
-    pred1 = esm.pdb_to_atom14(f'met/{entry1}.pdb', seq1)
-    true1 = esm.pdb_to_atom14(f'rcsb/{entry1}.pdb', seq1)
+    pred1, _ = esm.pdb_to_atom14(f'met/{entry1}.pdb')
     print(pred1.shape, true1.shape)
     pred1, _ = esm.kabsch_align(true1, pred1)
 
-    pred2 = esm.pdb_to_atom14(f'met/{entry2}.pdb', seq2)
-    true2 = esm.pdb_to_atom14(f'rcsb/{entry2}.pdb', seq2, model_n=1)
+    pred2, _ = esm.pdb_to_atom14(f'met/{entry2}.pdb')
     print(pred2.shape, true2.shape)
     pred2, _ = esm.kabsch_align(true2, pred2)
 

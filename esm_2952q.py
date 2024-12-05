@@ -50,33 +50,34 @@ def convert_outputs_to_pdb(outputs):
         pdbs.append(to_pdb(pred))
     return pdbs
 
-def pdb_to_atom14(fname, seq, sname=None, device=None, model_n=0):
+def pdb_to_atom14(fname, sname=None, device=None, model_n=0):
     home_dir = os.environ['HOME']
     import Bio.PDB
+    from Bio.SeqUtils import seq1
     if sname is None:
         sname = fname[:fname.rfind('.')]
     parser = Bio.PDB.PDBParser()
     structure = parser.get_structure(sname, f"{home_dir}/scratch/bio-out/{fname}")
     coords = []
-    print(seq)
+    seq = ''
     for m, model in enumerate(structure.get_models()):
         if m != model_n:
             continue
         for chain in model.get_chains():
             for i, residue in enumerate(chain.get_residues()):
-                if i == len(seq):
-                    break
-                # print(residue.get_resname())
+                if not residue.has_id('CA'):
+                    continue
+                seq += seq1(residue.get_resname())
                 n_atoms = 0
                 for atom in residue.get_atoms():
-                    if atom.element != 'H':
+                    if atom.element != 'H' and not atom.get_id() == 'OXT':
                         n_atoms += 1
                         coords.append(atom.get_coord())
-                print(residue.get_resname(), n_atoms)
+                # print(residue.get_resname(), n_atoms)
             break # only one chain
         break # only one model
     coords = torch.tensor(coords, device=device)
-    return coords
+    return coords, seq
 
 def kabsch_align(fixed, moving):
     fixed_center = fixed.mean(dim=0)
@@ -355,6 +356,11 @@ if __name__ == '__main__':
     entry = df['Entry'][SEQ_NUM]
     print(f"modeling {entry}")
 
+    coords0, seq = pdb_to_atom14(f"rcsb/{entry}.pdb")
+    print(coords0.shape)
+    print("RMSD naive:", compute_rmsd(coords, coords0))
+    seqs = [seq]
+
     RUN_INFERENCE = False
     if RUN_INFERENCE:
         tokenizer, model = get_esmfold()
@@ -378,12 +384,9 @@ if __name__ == '__main__':
         pdb = convert_outputs_to_pdb(outputs)
         save_pdb(pdb, 'output_structure.pdb')
 
-    coords = pdb_to_atom14('output_structure.pdb', seqs[0])
+    coords, _ = pdb_to_atom14('output_structure.pdb')
     print(coords)
     print(coords.shape)
-    coords0 = pdb_to_atom14(f"rcsb/{entry}.pdb", seqs[0])
-    print(coords0.shape)
-    print("RMSD naive:", compute_rmsd(coords, coords0))
 
     aligned, _ = kabsch_align(coords0, coords)
     print("RMSD kabsch:", compute_rmsd(aligned, coords0))
