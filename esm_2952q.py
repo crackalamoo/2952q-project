@@ -50,7 +50,7 @@ def convert_outputs_to_pdb(outputs):
         pdbs.append(to_pdb(pred))
     return pdbs
 
-def pdb_to_atom14(fname, seq, sname=None):
+def pdb_to_atom14(fname, seq, sname=None, device=None):
     home_dir = os.environ['HOME']
     import Bio.PDB
     if sname is None:
@@ -69,9 +69,28 @@ def pdb_to_atom14(fname, seq, sname=None):
                         coords.append(atom.get_coord())
             break # only one chain
         break # only one model
-    coords = np.array(coords)
+    coords = torch.tensor(coords, device=device)
     return coords
 
+def kabsch_align(fixed, moving):
+    fixed_centered = fixed - fixed.mean(dim=0)
+    moving_centered = moving - moving.mean(dim=0)
+
+    cov = torch.mm(moving_centered.T, fixed_centered)
+    U, S, Vt = torch.svd(cov)
+
+    d = torch.det(torch.mm(Vt.T, U.T))
+    D = torch.diag(torch.tensor([1.0, 1.0, d]))
+    rotation_matrix = torch.mm(torch.mm(Vt.T, D), U.T)
+
+    aligned = torch.mm(moving_centered, rotation_matrix.T)
+
+    return aligned, rotation_matrix
+
+def compute_rmsd(pred, target):
+    diff = pred - target
+    rmsd = torch.sqrt(torch.square(diff).sum() / pred.size(0))
+    return rmsd.item()
 
 def _my_esm_embeds(model, esmaa, trigger_len=None):
     if trigger_len is None:
@@ -325,7 +344,7 @@ if __name__ == '__main__':
     entry = df['Entry'][SEQ_NUM]
     print(f"modeling {entry}")
 
-    RUN_INFERENCE = False
+    RUN_INFERENCE = True
     if RUN_INFERENCE:
         tokenizer, model = get_esmfold()
 
@@ -353,5 +372,9 @@ if __name__ == '__main__':
     print(coords.shape)
     coords0 = pdb_to_atom14(f"rcsb/{entry}.pdb", seqs[0])
     print(coords0.shape)
+    print("RMSD naive:", compute_rmsd(coords, coords0))
+
+    aligned, _ = kabsch_align(coords0, coords)
+    print("RMSD kabsch:", compute_rmsd(aligned, coords0))
 
     print("Done")
