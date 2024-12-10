@@ -3,6 +3,7 @@ os.environ['HF_HOME'] = '~/scratch/huggingface'
 import requests
 from io import BytesIO
 import pandas as pd
+import time
 # from esm_2952q import save_pdb
 
 def get_monomers(taxonomy_id, min_len, max_len):
@@ -43,7 +44,13 @@ def rcsb_sequence(uniprot_id):
 
 
 if __name__ == '__main__':
-    df = get_ecoli_seqs(min_len=5,max_len=100)
+    # df = get_ecoli_seqs(min_len=5,max_len=100)
+    df = pd.concat([
+        get_ecoli_seqs(min_len=5,max_len=100),
+        get_monomers(4932, min_len=5, max_len=100),
+        get_monomers(10090, min_len=5, max_len=100),
+        get_monomers(9606, min_len=5, max_len=100),
+    ])
     save_seqs(df)
     seqs = df['Sequence'].tolist()
     print(seqs)
@@ -55,6 +62,10 @@ if __name__ == '__main__':
         if pdb is not None:
             print("saving:", entry)
             save_pdb([pdb], f"rcsb/{entry}.pdb")
-    pdb = rcsb_sequence('P68871') # hemoglobin
-    save_pdb([pdb], f"rcsb/P68871.pdb")
+        else:
+            print("no pdb:", entry)
+        time.sleep(0.1)
+    # pdb = rcsb_sequence('P68871') # hemoglobin
+    # save_pdb([pdb], f"rcsb/P68871.pdb")
+    print("Done")
 
