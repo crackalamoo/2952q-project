@@ -56,4 +56,6 @@ if __name__ == '__main__':
         if pdb is not None:
             print("saving:", entry)
             save_pdb([pdb], f"rcsb/{entry}.pdb")
+    pdb = rcsb_sequence('P68871') # hemoglobin
+    save_pdb([pdb], f"rcsb/P68871.pdb")
 

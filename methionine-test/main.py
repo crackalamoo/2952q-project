@@ -32,6 +32,9 @@ if __name__ == '__main__':
     true2, seq2 = esm.pdb_to_atom14(f'rcsb/{entry2}.pdb')
     print(seq2)
 
+    hb_seq = 'MVHLTPEEKSAVTALWGKVNVDEVGGEALGRLLVVYPWTQRFFESFGDLSTPDAVMGNPKVKAHGKKVLGAFSDGLAHLDNLKGTFATLSELHCDKLHVDPENFRLLGNVLVCVLAHHFGKEFTPPVQAAYQKVVAGVANALAHKYH'
+    print(len(hb_seq))
+
     assert seq1[0] == 'M'
     assert seq2[0] != 'M'
 
@@ -59,6 +62,12 @@ if __name__ == '__main__':
         save_pdb_seq(seq2, entry2)
         save_pdb_seq('M'+seq2, entry2+'_M')
 
+        save_pdb_seq(hb_seq, 'Hb')
+        save_pdb_seq(hb_seq[1:], 'Hb_NM')
+        hb_seq = hb_seq[:6] + 'V' + hb_seq[7:]
+        print(hb_seq)
+        save_pdb_seq(hb_seq, 'Hb_V')
+
     pred1, _ = esm.pdb_to_atom14(f'met/{entry1}_M.pdb')
     print(pred1.shape, true1.shape)
     pred1, _ = esm.kabsch_align(true1, pred1)
@@ -83,4 +92,20 @@ if __name__ == '__main__':
     print("RMSD 2 (M pred vs NM pred):", esm.compute_rmsd(pred2_m, pred2)) # MET already removed
     pred2_m, _ = esm.kabsch_align(true2, pred2_m)
     print("RMSD 2 (M pred vs NM true):", esm.compute_rmsd(pred2_m, true2))
+
+    hb_true, _ = esm.pdb_to_atom14('rcsb/P68871.pdb')
+    hb, _ = esm.pdb_to_atom14('met/Hb.pdb')
+    hb_nm, _ = esm.pdb_to_atom14('met/Hb_NM.pdb')
+    hb_v, _ = esm.pdb_to_atom14('met/Hb_V.pdb')
+    hb_nm, _ = esm.kabsch_align(hb[8:], hb_nm)
+
+    before_ev = 8+8+10+9+8+8
+    hb_no_e = torch.cat([hb[:before_ev], hb[before_ev+10:]], dim=0)
+    hb_no_v = torch.cat([hb_v[:before_ev], hb_v[before_ev+8:]], dim=0)
+    hb_no_v, _ = esm.kabsch_align(hb_no_e, hb_no_v)
+
+    print("RMSD NM:", esm.compute_rmsd(hb[8:], hb_nm))
+    print("RMSD V:", esm.compute_rmsd(hb_no_e, hb_no_v))
+    hb_true_align, _ = esm.kabsch_align(hb_true, hb)
+    print("RMSD true:", esm.compute_rmsd(hb_true, hb_true_align))
 
