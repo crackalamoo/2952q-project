@@ -9,15 +9,26 @@ import uniprot
 def get_trigger(tokenizer, model, df, steps, device):
     seqs = df['Sequence'].tolist()
     entries = df['Entry'].tolist()
+    coords0 = []
     home_dir = os.environ['HOME']
     for i in reversed(range(len(entries))):
         if os.path.exists(f'{home_dir}/scratch/bio-out/rcsb/{entries[i]}.pdb'):
             print(f"keeping {entries[i]}")
+            coord0, seq0 = esm.pdb_to_atom14(f'rcsb/{entries[i]}.pdb')
+            if seq0 is None:
+                print(f"deleting {entries[i]} due to multiple chains")
+                seqs.pop(i)
+                entries.pop(i)
+                continue
+            print(seqs[i], '->', seq0)
+            seqs[i] = seq0
+            coords0.append(coord0)
         else:
             print(f"deleting {entries[i]}")
             seqs.pop(i)
             entries.pop(i)
     print([(seq, len(seq)) for seq in seqs], len(seqs))
+    print([c.shape for c in coords0])
     # seqs = [seq[:100] for seq in seqs]
     trigger = 'G' * 10 # initial trigger, will be updated
     view_seq = 6
@@ -79,7 +90,7 @@ def get_trigger(tokenizer, model, df, steps, device):
                 loss += sub_loss.item()
                 # print(f"Memory before backward {j}: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
                 outputs = {
-                    k: v.detach().to('cpu') if k not in ['predicted_aligned_error', 'ptm_logits', 's_z'] else v
+                    k: v.detach().to('cpu') if k not in ['predicted_aligned_error', 'ptm_logits', 's_z', 'positions'] else v
                     for k, v in outputs.items()
                 }
                 torch.cuda.empty_cache()

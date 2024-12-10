@@ -50,7 +50,7 @@ def convert_outputs_to_pdb(outputs):
         pdbs.append(to_pdb(pred))
     return pdbs
 
-def pdb_to_atom14(fname, sname=None, device=None, model_n=0, residue_start=0):
+def pdb_to_atom14(fname, sname=None, device=None, model_n=0, residue_start=0, chain_n=None):
     home_dir = os.environ['HOME']
     import Bio.PDB
     from Bio.SeqUtils import seq1
@@ -63,7 +63,12 @@ def pdb_to_atom14(fname, sname=None, device=None, model_n=0, residue_start=0):
     for m, model in enumerate(structure.get_models()):
         if m != model_n:
             continue
+        n_chains = 0
         for chain in model.get_chains():
+            if chain_n is not None and n_chains != chain_n:
+                continue
+            if n_chains > 0 and chain_n is None:
+                return None, None
             for i, residue in enumerate(chain.get_residues()):
                 if i < residue_start or not residue.has_id('CA'):
                     continue
@@ -74,9 +79,9 @@ def pdb_to_atom14(fname, sname=None, device=None, model_n=0, residue_start=0):
                         n_atoms += 1
                         coords.append(atom.get_coord())
                 # print(residue.get_resname(), n_atoms)
-            break # only one chain
+            n_chains += 1
         break # only one model
-    coords = torch.tensor(coords, device=device)
+    coords = torch.tensor(np.array(coords), device=device)
     return coords, seq
 
 def kabsch_align(fixed, moving):

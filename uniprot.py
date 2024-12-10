@@ -29,7 +29,6 @@ def save_seqs(df):
 
 def read_seqs_df():
     df = pd.read_csv('~/scratch/bio-out/seqs-df.csv', compression='gzip', sep='\t')
-    # return df['Sequence'].tolist()
     return df
 
 def rcsb_sequence(uniprot_id):
