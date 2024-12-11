@@ -176,10 +176,31 @@ def get_trigger(tokenizer, model, df, steps, device):
     return trigger
 
 if __name__ == '__main__':
+    from accelerate import Accelerator
+    from accelerate.utils import DeepSpeedPlugin
+    from accelerate.state import AcceleratorState
+
     start_time = time.time()
     tokenizer, model = esm.get_esmfold()
-    device = torch.device('cuda')
-    model = model.to(device)
+
+    from torch.utils.data import DataLoader, TensorDataset
+    dummy_data = torch.zeros(10, 3)
+    dummy_labels = torch.zeros(10)
+    dummy_dataset = TensorDataset(dummy_data, dummy_labels)
+    dummy_dataloader = DataLoader(dummy_dataset, batch_size=1)
+
+    deepspeed_plugin=DeepSpeedPlugin(
+        zero_stage=3,
+        offload_param_device='cpu',
+        gradient_clipping=1.0,
+        # train_micro_batch_size_per_gpu=1,
+    )
+    accelerator = Accelerator(deepspeed_plugin=deepspeed_plugin)
+    tokenizer, model, dummy_dataloader = accelerator.prepare(tokenizer, model, dummy_dataloader)
+    device = accelerator.device
+
+    # device = torch.device('cuda')
+    # model = model.to(device)
     print(f"Memory after loading: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
 
     model.esm = model.esm.half()
