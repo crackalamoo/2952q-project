@@ -104,8 +104,12 @@ if __name__ == '__main__':
     hb_no_v = torch.cat([hb_v[:before_ev], hb_v[before_ev+8:]], dim=0)
     hb_no_v, _ = esm.kabsch_align(hb_no_e, hb_no_v)
 
+    hb_nm_no_e = torch.cat([hb_nm[:before_ev-8], hb_nm[before_ev+10-8:]], dim=0)
+    hb_nm_no_v, _ = esm.kabsch_align(hb_nm_no_e, hb_no_v[8:])
+
     print("RMSD NM:", esm.compute_rmsd(hb[8:], hb_nm))
     print("RMSD V:", esm.compute_rmsd(hb_no_e, hb_no_v))
-    hb_true_align, _ = esm.kabsch_align(hb_true, hb)
-    print("RMSD true:", esm.compute_rmsd(hb_true, hb_true_align))
+    # hb_true_align, _ = esm.kabsch_align(hb_true, hb)
+    # print("RMSD true:", esm.compute_rmsd(hb_true, hb_true_align))
+    print("RMSD NM-V:", esm.compute_rmsd(hb_nm_no_e, hb_nm_no_v))
 
