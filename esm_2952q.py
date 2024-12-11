@@ -100,12 +100,12 @@ def kabsch_align(fixed, moving):
     fixed_centered = fixed - fixed_center
     moving_centered = moving - moving_center
 
-    cov = torch.mm(moving_centered.T, fixed_centered)
-    cov_clone = cov.clone()
-    U, S, Vt = torch.linalg.svd(cov_clone)
+    cov = torch.mm(moving_centered.T, fixed_centered) + torch.eye(3, device=fixed.device)*1e-8
+    U, S, Vt = torch.linalg.svd(cov)
 
     rotation_matrix = torch.mm(Vt.T, U.T)
     if torch.det(rotation_matrix) < 0:
+        Vt = Vt.clone()
         Vt[2] = -Vt[2]
         rotation_matrix = torch.mm(Vt.T, U.T)
 

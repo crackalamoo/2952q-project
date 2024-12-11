@@ -77,7 +77,6 @@ def get_trigger(tokenizer, model, df, steps, device):
         for i, seq in enumerate(seqs):
             print("entry:", entries[i])
             torch.cuda.empty_cache()
-            torch.autograd.set_detect_anomaly(True) # TODO: remove this when ready
             with torch.cuda.amp.autocast():
                 # print(f"Memory before forward: {torch.cuda.memory_allocated() / 1e6} MB") 
                 outputs, trigger_embeds = esm.my_forward(tokenizer, model, [seq], trigger)
