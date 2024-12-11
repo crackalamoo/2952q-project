@@ -50,7 +50,7 @@ def convert_outputs_to_pdb(outputs):
         pdbs.append(to_pdb(pred))
     return pdbs
 
-def pdb_to_atom14(fname, sname=None, device=None, model_n=0, residue_start=0, chain_n=None):
+def pdb_to_atom14(fname, sname=None, device=None, model_n=0, residue_start=0, chain_n=None, split_residues=False):
     home_dir = os.environ['HOME']
     import Bio.PDB
     from Bio.SeqUtils import seq1
@@ -72,12 +72,21 @@ def pdb_to_atom14(fname, sname=None, device=None, model_n=0, residue_start=0, ch
             for i, residue in enumerate(chain.get_residues()):
                 if i < residue_start or not residue.has_id('CA'):
                     continue
+                if split_residues:
+                    residue_coords = []
                 seq += seq1(residue.get_resname())
                 n_atoms = 0
                 for atom in residue.get_atoms():
                     if atom.element != 'H' and not atom.get_id() == 'OXT':
                         n_atoms += 1
-                        coords.append(atom.get_coord())
+                        if split_residues:
+                            residue_coords.append(atom.get_coord())
+                        else:
+                            coords.append(atom.get_coord())
+                if split_residues:
+                    for i in range(14 - n_atoms):
+                        residue_coords.append([0, 0, 0]) # nonexistent atom
+                    coords.append(residue_coords)
                 # print(residue.get_resname(), n_atoms)
             n_chains += 1
         break # only one model
@@ -92,7 +101,8 @@ def kabsch_align(fixed, moving):
     moving_centered = moving - moving_center
 
     cov = torch.mm(moving_centered.T, fixed_centered)
-    U, S, Vt = torch.svd(cov)
+    cov_clone = cov.clone()
+    U, S, Vt = torch.linalg.svd(cov_clone)
 
     rotation_matrix = torch.mm(Vt.T, U.T)
     if torch.det(rotation_matrix) < 0:
