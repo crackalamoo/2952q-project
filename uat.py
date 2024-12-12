@@ -122,7 +122,11 @@ def get_trigger(tokenizer, model, df, steps, device):
                     print(outputs['atom14_atom_exists'].shape)
                 # print(f"Memory after cleanup: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
                 # print(trigger_embeds.shape)
-                emb_grad = emb_grad + torch.autograd.grad(sub_loss, trigger_embeds, retain_graph=True)[0]
+
+                # emb_grad = emb_grad + torch.autograd.grad(sub_loss, trigger_embeds, retain_graph=True)[0]
+                sub_loss.backward(retain_graph=True)
+                emb_grad = emb_grad + trigger_embeds.grad
+
                 # print(f"Memory after backward {j}: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
                 del sub_loss
                 del sub_error
