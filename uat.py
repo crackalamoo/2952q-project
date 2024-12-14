@@ -15,12 +15,12 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
         if os.path.exists(f'{home_dir}/scratch/bio-out/rcsb/{entries[i]}.pdb'):
             print(f"keeping {entries[i]}")
             coord0, seq0 = esm.pdb_to_atom14(f'rcsb/{entries[i]}.pdb', split_residues=True)
-            if seq0 is None or len(seq0) == 0 or len(seq0) > 70:
+            if seq0 is None or len(seq0) == 0 or len(seq0) > 90:
                 if seq0 is None:
                     print(f"deleting {entries[i]}: multiple chains")
                 elif len(seq0) == 0:
                     print(f"deleting {entries[i]}: no residues")
-                elif len(seq0) > 70:
+                elif len(seq0) > 90:
                     print(f"deleting {entries[i]}: too long")
                 seqs.pop(i)
                 entries.pop(i)
@@ -88,8 +88,6 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
                 for k, v in outputs.items()
             }
 
-            # error = outputs.predicted_aligned_error.to(torch.float16)
-
             coord0 = coords0[i].to(dev2)
             pred = outputs['positions'][-1][:, :-len(trigger), :]
             exists = outputs['atom14_atom_exists'][:, :-len(trigger), :].to(dev2)
@@ -108,11 +106,8 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
             print("emb_grad.shape:", emb_grad.shape)
             assert error.size(0) == 1
             for j in range(0, error.size(1), chunk_size):
-                # sub_error = error[0, j:j+chunk_size, j:j+chunk_size]
                 sub_error = error[0, j:j+chunk_size, :]
-                sub_error = torch.diag(sub_error)
-                # print("sub_error:", sub_error.shape)
-                sub_loss = -torch.mean(sub_error) # high error = low loss (for trigger)
+                sub_loss = torch.mean(sub_error)
                 loss += sub_loss.item()
                 # print(f"Memory before backward {j}: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
                 torch.cuda.empty_cache()
@@ -121,9 +116,7 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
                     print(outputs['positions'][-1].shape)
                     print(outputs['atom14_atom_exists'].shape)
                 # print(f"Memory after cleanup: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
-                # print(trigger_embeds.shape)
 
-                # emb_grad = emb_grad + torch.autograd.grad(sub_loss, trigger_embeds, retain_graph=True)[0]
                 sub_loss.backward(retain_graph=True)
                 emb_grad = emb_grad + trigger_embeds.grad
 

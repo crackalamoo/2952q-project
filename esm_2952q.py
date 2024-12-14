@@ -31,7 +31,6 @@ aa = ['A','R','N','D','C','Q','E','G','H','I','L','K','M','F','P','S','T','W','Y
 def convert_outputs_to_pdb(outputs):
     outputs = {k: v.detach().to("cpu").numpy() for k, v in outputs.items()}
     final_atom_positions = atom14_to_atom37(outputs["positions"][-1], outputs)
-    # final_atom_positions = final_atom_positions.cpu().numpy()
     final_atom_mask = outputs["atom37_atom_exists"]
     pdbs = []
     for i in range(outputs["aatype"].shape[0]):
