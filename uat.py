@@ -6,7 +6,7 @@ import esm_2952q as esm
 import uniprot
 
 
-def get_trigger(tokenizer, model, df, steps, device):
+def get_trigger(tokenizer, model, df, steps, dev1, dev2):
     seqs = df['Sequence'].tolist()
     entries = df['Entry'].tolist()
     coords0 = []
@@ -45,13 +45,13 @@ def get_trigger(tokenizer, model, df, steps, device):
     with torch.no_grad():
 
         print("Sequence from database:", seqs[view_seq])
-        outputs, _ = esm.my_forward(tokenizer, model, [seqs[view_seq]], '')
+        outputs, _ = esm.my_forward(tokenizer, model, [seqs[view_seq]], '', dev1, dev2)
         pdb = esm.convert_outputs_to_pdb(outputs)
         esm.save_pdb(pdb, 'output_structure.pdb')
 
         avg_loss = 0
         for i, seq in enumerate(seqs):
-            outputs, trigger_embeds = esm.my_forward(tokenizer, model, [seq], trigger)
+            outputs, trigger_embeds = esm.my_forward(tokenizer, model, [seq], trigger, dev1, dev2)
             error = outputs.predicted_aligned_error.to(dtype=torch.float16)
             loss = 0
             for j in range(0, error.size(1), chunk_size):
@@ -73,13 +73,13 @@ def get_trigger(tokenizer, model, df, steps, device):
         grad = None
         print(f"STEP {step+1}/{steps}")
         avg_loss = 0
-        emb_grad = torch.zeros(1, len(trigger), 2560, device=device, dtype=torch.float32)
+        emb_grad = torch.zeros(1, len(trigger), 2560, device=dev1, dtype=torch.float32)
         for i, seq in enumerate(seqs):
             print("entry:", entries[i])
             torch.cuda.empty_cache()
             with torch.cuda.amp.autocast():
                 # print(f"Memory before forward: {torch.cuda.memory_allocated() / 1e6} MB") 
-                outputs, trigger_embeds = esm.my_forward(tokenizer, model, [seq], trigger)
+                outputs, trigger_embeds = esm.my_forward(tokenizer, model, [seq], trigger, dev1, dev2)
                 # print(f"Memory after forward: {torch.cuda.memory_allocated() / 1e6} MB")
             keep_fields = set(['positions'])
             # keep_fields = set(['predicted_aligned_error', 'ptm_logits', 's_z'])
@@ -90,13 +90,13 @@ def get_trigger(tokenizer, model, df, steps, device):
 
             # error = outputs.predicted_aligned_error.to(torch.float16)
 
-            coord0 = coords0[i].to(device)
+            coord0 = coords0[i].to(dev2)
             pred = outputs['positions'][-1][:, :-len(trigger), :]
-            exists = outputs['atom14_atom_exists'][:, :-len(trigger), :].to(device)
+            exists = outputs['atom14_atom_exists'][:, :-len(trigger), :].to(dev2)
             aligned, _ = esm.kabsch_align(coord0.view(-1, 3), pred.view(-1, 3))
             aligned = aligned.view(1, -1, 14, 3)
             square_diff = torch.square(aligned - coord0)
-            error = square_diff.sum(dim=3).to(device)
+            error = square_diff.sum(dim=3).to(dev2)
             print("error.shape:", error.shape)
             error = -1 * error * exists
             coord0.to('cpu')
@@ -159,7 +159,7 @@ def get_trigger(tokenizer, model, df, steps, device):
     with torch.no_grad():
         avg_loss = 0
         for i, seq in enumerate(seqs):
-            outputs, trigger_embeds = esm.my_forward(tokenizer, model, [seq], trigger)
+            outputs, trigger_embeds = esm.my_forward(tokenizer, model, [seq], trigger, dev1, dev2)
             error = outputs.predicted_aligned_error.to(dtype=torch.float16)
             loss = 0
             for j in range(0, error.size(1), chunk_size):
@@ -183,8 +183,9 @@ if __name__ == '__main__':
     start_time = time.time()
     tokenizer, model = esm.get_esmfold()
 
-    device = torch.device('cuda')
-    model = model.to(device)
+    dev1 = torch.device('cuda:0')
+    dev2 = torch.device('cuda:1')
+    model = model.to(dev1)
     print(f"Memory after loading: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
 
     model.esm = model.esm.half()
@@ -194,12 +195,16 @@ if __name__ == '__main__':
     # model.trunk = model.trunk.half()
     # print(model.trunk.config.max_recycles) # 4
     # model.trunk.config.max_recycles = 6
+    model.trunk.to(dev2)
+    model.lddt_head.to(dev2)
+    model.ptm_head.to(dev2)
+    model.esm_s_combine.to(dev2)
     print(f"Memory after adjusting: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
 
     df = uniprot.read_seqs_df()
 
     torch.cuda.empty_cache()
-    trigger = get_trigger(tokenizer, model, df, 16, device)
+    trigger = get_trigger(tokenizer, model, df, 16, dev1, dev2)
     print("Trigger:", trigger)
     seconds = time.time() - start_time
     minutes = int(seconds / 60)

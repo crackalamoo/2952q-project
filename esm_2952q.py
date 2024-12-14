@@ -29,9 +29,9 @@ aa = ['A','R','N','D','C','Q','E','G','H','I','L','K','M','F','P','S','T','W','Y
 
 
 def convert_outputs_to_pdb(outputs):
-    final_atom_positions = atom14_to_atom37(outputs["positions"][-1], outputs)
     outputs = {k: v.detach().to("cpu").numpy() for k, v in outputs.items()}
-    final_atom_positions = final_atom_positions.cpu().numpy()
+    final_atom_positions = atom14_to_atom37(outputs["positions"][-1], outputs)
+    # final_atom_positions = final_atom_positions.cpu().numpy()
     final_atom_mask = outputs["atom37_atom_exists"]
     pdbs = []
     for i in range(outputs["aatype"].shape[0]):
@@ -193,6 +193,8 @@ def _my_trunk_forward(trunk, seq_feats, pair_feats, true_aa, residx, mask, no_re
     recycle_s = torch.zeros_like(s_s)
     recycle_z = torch.zeros_like(s_z)
     recycle_bins = torch.zeros(*s_z.shape[:-1], device=device, dtype=torch.int32)
+    print("device:", device)
+    trunk.recycle_s_norm.to(device)
 
     for recycle_idx in range(no_recycles):
         with ContextManagers([] if recycle_idx == no_recycles - 1 else [torch.no_grad()]):
@@ -255,12 +257,12 @@ def tokenize_and_embed(tokenizer, model, sequences, add_special_tokens=False):
         esm_embeds = esm_embeds[:, 1:-1, :]
     return esm_embeds
 
-def my_forward(tokenizer, model, sequences, trigger):
+def my_forward(tokenizer, model, sequences, trigger, dev1, dev2):
     # tokenize inputs
     trigger_seqs = [seq + trigger for seq in sequences]
     inputs = tokenizer(trigger_seqs, add_special_tokens=False, padding=True, return_tensors='pt')
-    input_ids = inputs.input_ids.to(model.device)
-    attention_mask = inputs.attention_mask.to(model.device)
+    input_ids = inputs.input_ids.to(dev1)
+    attention_mask = inputs.attention_mask.to(dev1)
     num_recycles = None
 
     # generate constants and position ids
@@ -293,13 +295,13 @@ def my_forward(tokenizer, model, sequences, trigger):
         nonlocal esmaa
         nonlocal masked_aa
         esm_output = _my_esm_forward(model, esmaa, embeds)
-        esm_hidden_states = esm_output
+        esm_hidden_states = tuple([t.to(dev2) for t in esm_output])
 
         esm_s = torch.stack(esm_hidden_states, dim=2)
         esm_s = esm_s[:, 1:-1] # B, L, nLayers, C
         # } model.compute_language_model_representations
 
-        esm_s = esm_s.to(model.esm_s_combine.dtype)
+        esm_s = esm_s.to(dtype=model.esm_s_combine.dtype, device=model.esm_s_combine.device)
 
         esm_s = (model.esm_s_combine.softmax(0).unsqueeze(0) @ esm_s).squeeze(2)
         s_s_0 = model.esm_s_mlp(esm_s)
@@ -310,7 +312,7 @@ def my_forward(tokenizer, model, sequences, trigger):
         # print("Got s_s, s_z")
 
         sys.stdout.flush()
-        structure = _my_trunk_forward(model.trunk, s_s_0, s_z_0, aa, position_ids, attention_mask, no_recycles=num_recycles)
+        structure = _my_trunk_forward(model.trunk, s_s_0.to(dev2), s_z_0.to(dev2), aa.to(dev2), position_ids.to(dev2), attention_mask.to(dev2), no_recycles=num_recycles)
         # print("Got structure")
         structure = {
             k: v
@@ -328,13 +330,12 @@ def my_forward(tokenizer, model, sequences, trigger):
             ]
         }
 
-        disto_logits = model.distogram_head(structure["s_z"])
-        disto_logits = (disto_logits + disto_logits.transpose(1, 2)) / 2
-        structure["distogram_logits"] = disto_logits
+        # disto_logits = model.distogram_head(structure["s_z"])
+        # disto_logits = (disto_logits + disto_logits.transpose(1, 2)) / 2
+        # structure["distogram_logits"] = disto_logits
 
-        lm_logits = model.lm_head(structure["s_s"])
-        structure["lm_logits"] = lm_logits
-        # print("Got logits")
+        # lm_logits = model.lm_head(structure["s_s"])
+        # structure["lm_logits"] = lm_logits
 
         structure["aatype"] = aa
         make_atom14_masks(structure)
