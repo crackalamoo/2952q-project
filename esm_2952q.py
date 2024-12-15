@@ -192,7 +192,6 @@ def _my_trunk_forward(trunk, seq_feats, pair_feats, true_aa, residx, mask, no_re
     recycle_s = torch.zeros_like(s_s)
     recycle_z = torch.zeros_like(s_z)
     recycle_bins = torch.zeros(*s_z.shape[:-1], device=device, dtype=torch.int32)
-    print("device:", device)
     trunk.recycle_s_norm.to(device)
 
     for recycle_idx in range(no_recycles):

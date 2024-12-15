@@ -5,6 +5,13 @@ import time
 import esm_2952q as esm
 import uniprot
 
+def structure_rmsd(pred, pred_exists, true):
+    aligned, _ = esm.kabsch_align(true.view(-1, 3), pred.view(-1, 3))
+    aligned = aligned.view(1, -1, 14, 3)
+    square_diff = torch.square(aligned - true)
+    error = square_diff.sum(dim=3).to(dev2)
+    rmsd = error * pred_exists
+    return rmsd[0, :, :]
 
 def get_trigger(tokenizer, model, df, steps, dev1, dev2):
     seqs = df['Sequence'].tolist()
@@ -53,14 +60,11 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
         for i, seq in enumerate(seqs):
             outputs, trigger_embeds = esm.my_forward(tokenizer, model, [seq], trigger, dev1, dev2)
             error = outputs.predicted_aligned_error.to(dtype=torch.float16)
-            loss = 0
-            for j in range(0, error.size(1), chunk_size):
-                sub_error = error[0, j:j+chunk_size, j:j+chunk_size]
-                sub_error = torch.diag(sub_error)
-                sub_loss = -torch.mean(sub_error) # high error = low loss (for trigger)
-                loss += sub_loss.item()
-                del sub_error
-                del sub_loss
+            coord0 = coords0[i].to(dev2)
+            pred = outputs['positions'][-1][:, :-len(trigger), :]
+            exists = outputs['atom14_atom_exists'][:, :-len(trigger), :].to(dev2)
+            error = structure_rmsd(pred, exists, coord0)
+            loss = torch.mean(error)
             avg_loss += loss
             if i == view_seq:
                 print("Initial sequence:", seq, trigger)
@@ -91,30 +95,17 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
             coord0 = coords0[i].to(dev2)
             pred = outputs['positions'][-1][:, :-len(trigger), :]
             exists = outputs['atom14_atom_exists'][:, :-len(trigger), :].to(dev2)
-            aligned, _ = esm.kabsch_align(coord0.view(-1, 3), pred.view(-1, 3))
-            aligned = aligned.view(1, -1, 14, 3)
-            square_diff = torch.square(aligned - coord0)
-            error = square_diff.sum(dim=3).to(dev2)
-            print("error.shape:", error.shape)
-            error = -1 * error * exists
+            error = structure_rmsd(pred, exists, coord0)
             coord0.to('cpu')
 
-            # print(error.shape)
-            # print(trigger_embeds.shape)
             loss = 0
-            # emb_grad = torch.zeros_like(trigger_embeds)
-            print("emb_grad.shape:", emb_grad.shape)
-            assert error.size(0) == 1
+            # print("emb_grad.shape:", emb_grad.shape)
             for j in range(0, error.size(1), chunk_size):
-                sub_error = error[0, j:j+chunk_size, :]
+                sub_error = error[j:j+chunk_size, :]
                 sub_loss = torch.mean(sub_error)
-                loss += sub_loss.item()
+                loss += sub_loss.item() * min(error.size(1) - j, chunk_size) / error.size(1)
                 # print(f"Memory before backward {j}: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
                 torch.cuda.empty_cache()
-                if i == view_seq and j == 0:
-                    print(outputs.keys())
-                    print(outputs['positions'][-1].shape)
-                    print(outputs['atom14_atom_exists'].shape)
                 # print(f"Memory after cleanup: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
 
                 sub_loss.backward(retain_graph=True)
@@ -123,7 +114,6 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
                 # print(f"Memory after backward {j}: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
                 del sub_loss
                 del sub_error
-            # print("Loss:", loss)
             # print(f"Memory after full backward: {torch.cuda.memory_allocated() / 1e6:.2f} MB")
             del outputs
             del error
@@ -155,13 +145,12 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
             outputs, trigger_embeds = esm.my_forward(tokenizer, model, [seq], trigger, dev1, dev2)
             error = outputs.predicted_aligned_error.to(dtype=torch.float16)
             loss = 0
-            for j in range(0, error.size(1), chunk_size):
-                sub_error = error[0, j:j+chunk_size, j:j+chunk_size]
-                sub_error = torch.diag(sub_error)
-                sub_loss = torch.mean(sub_error)
-                loss += sub_loss.item()
-                del sub_error
-                del sub_loss
+            coord0 = coords0[i].to(dev2)
+            pred = outputs['positions'][-1][:, :-len(trigger), :]
+            exists = outputs['atom14_atom_exists'][:, :-len(trigger), :].to(dev2)
+            error = structure_rmsd(pred, exists, coord0)
+            coord0.to('cpu')
+            loss = torch.mean(error)
             avg_loss += loss
             if i == view_seq:
                 print("Final sequence:", seq, trigger)
@@ -185,7 +174,6 @@ if __name__ == '__main__':
     torch.backends.cuda.matmul.allow_tf32 = True
     model.trunk.set_chunk_size(32)
     # model.trunk.config.max_recycles = 1
-    # model.trunk = model.trunk.half()
     # print(model.trunk.config.max_recycles) # 4
     # model.trunk.config.max_recycles = 6
     model.trunk.to(dev2)
