@@ -11,24 +11,26 @@ def structure_rmsd(pred, pred_exists, true):
     square_diff = torch.square(aligned - true)
     error = square_diff.sum(dim=3).to(dev2)
     rmsd = error * pred_exists
-    return rmsd[0, :, :]
+    return -1 * rmsd[0, :, :]
 
 def get_trigger(tokenizer, model, df, steps, dev1, dev2):
     seqs = df['Sequence'].tolist()
     entries = df['Entry'].tolist()
     coords0 = []
     home_dir = os.environ['HOME']
+    MAX_LEN = 90
+    TRIGGER_LEN = 10
     for i in reversed(range(len(entries))):
         if os.path.exists(f'{home_dir}/scratch/bio-out/rcsb/{entries[i]}.pdb'):
             print(f"keeping {entries[i]}")
             coord0, seq0 = esm.pdb_to_atom14(f'rcsb/{entries[i]}.pdb', split_residues=True)
-            if seq0 is None or len(seq0) == 0 or len(seq0) > 90:
+            if seq0 is None or len(seq0) == 0 or len(seq0) > MAX_LEN:
                 if seq0 is None:
                     print(f"deleting {entries[i]}: multiple chains")
                 elif len(seq0) == 0:
                     print(f"deleting {entries[i]}: no residues")
-                elif len(seq0) > 90:
-                    print(f"deleting {entries[i]}: too long")
+                elif len(seq0) > MAX_LEN:
+                    print(f"deleting {entries[i]}: too long ({len(seq0)})")
                 seqs.pop(i)
                 entries.pop(i)
                 continue
@@ -41,14 +43,13 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
             entries.pop(i)
     print([(seq, len(seq)) for seq in seqs], len(seqs))
     print([c.shape for c in coords0], len(coords0))
-    # seqs = [seq[:100] for seq in seqs]
-    trigger = 'G' * 10 # initial trigger, will be updated
+    trigger = 'G' * TRIGGER_LEN # initial trigger, will be updated
     view_seq = 6
 
     aa_emb = esm.tokenize_and_embed(tokenizer, model, esm.aa).to('cpu')
     print(aa_emb.shape)
-    # chunk_size = 9
-    chunk_size = 2
+    chunk_size = 50
+    # chunk_size = 2
     with torch.no_grad():
 
         print("Sequence from database:", seqs[view_seq])
@@ -73,6 +74,8 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
         avg_loss /= len(seqs)
         print("Initial loss:", avg_loss)
 
+    min_loss = None
+    best_trigger = None
     for step in range(steps):
         grad = None
         print(f"STEP {step+1}/{steps}")
@@ -121,6 +124,9 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
             avg_loss += loss
         avg_loss /= len(seqs)
         print("AVERAGE LOSS:", avg_loss)
+        if min_loss is None or avg_loss < min_loss:
+            min_loss = avg_loss
+            best_trigger = trigger
 
         with torch.no_grad():
             # compute new trigger
@@ -139,6 +145,8 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
                 trigger = trigger[:i] + esm.aa[min_aa] + trigger[i+1:]
             print("Updated trigger:", trigger)
 
+    print("Best trigger:", best_trigger, min_loss)
+    trigger = best_trigger
     with torch.no_grad():
         avg_loss = 0
         for i, seq in enumerate(seqs):
