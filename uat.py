@@ -5,13 +5,26 @@ import time
 import esm_2952q as esm
 import uniprot
 
-def structure_rmsd(pred, pred_exists, true):
+LOSS_FACTOR = -1 # positive to minimize rmsd, negative to maximize rmsd
+PICK_ENTRY = None # use all valid RCSB entries
+
+def structure_rmsd(pred, pred_exists, true, ca_only=True):
+    if ca_only:
+        pred = pred[:, 1, :]
+        pred_exists = pred_exists[:, 1, :]
+        true = true[:, 1, :]
     aligned, _ = esm.kabsch_align(true.view(-1, 3), pred.view(-1, 3))
-    aligned = aligned.view(1, -1, 14, 3)
+    if not ca_only:
+        aligned = aligned.view(-1, 14, 3)
     square_diff = torch.square(aligned - true)
-    error = square_diff.sum(dim=3).to(dev2)
+    if ca_only:
+        error = square_diff.sum(dim=2).to(dev2)
+    else:
+        error = square_diff.sum(dim=3).to(dev2)
     rmsd = error * pred_exists
-    return -1 * rmsd[0, :, :]
+    if ca_only:
+        rmsd = rmsd.unsqueeze(0)
+    return LOSS_FACTOR * rmsd[:, :]
 
 def get_trigger(tokenizer, model, df, steps, dev1, dev2):
     seqs = df['Sequence'].tolist()
@@ -24,7 +37,7 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
         if os.path.exists(f'{home_dir}/scratch/bio-out/rcsb/{entries[i]}.pdb'):
             print(f"keeping {entries[i]}")
             coord0, seq0 = esm.pdb_to_atom14(f'rcsb/{entries[i]}.pdb', split_residues=True)
-            if seq0 is None or len(seq0) == 0 or len(seq0) > MAX_LEN:
+            if seq0 is None or len(seq0) == 0 or len(seq0) > MAX_LEN or (PICK_ENTRY is not None and entries[i] != PICK_ENTRY):
                 if seq0 is None:
                     print(f"deleting {entries[i]}: multiple chains")
                 elif len(seq0) == 0:
@@ -45,6 +58,11 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
     print([c.shape for c in coords0], len(coords0))
     trigger = 'G' * TRIGGER_LEN # initial trigger, will be updated
     view_seq = 6
+    if PICK_ENTRY is not None:
+        trigger = 'G' * (len(seqs[0]) - 1)
+        seqs[0] = 'M'
+        TRIGGER_LEN = 0
+        view_seq = 0
 
     aa_emb = esm.tokenize_and_embed(tokenizer, model, esm.aa).to('cpu')
     print(aa_emb.shape)
@@ -55,22 +73,24 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
         print("Sequence from database:", seqs[view_seq])
         outputs, _ = esm.my_forward(tokenizer, model, [seqs[view_seq]], '', dev1, dev2)
         pdb = esm.convert_outputs_to_pdb(outputs)
-        esm.save_pdb(pdb, 'output_structure.pdb')
+        # esm.save_pdb(pdb, f'outputs/output_structure_{entries[view_seq]}.pdb')
 
         avg_loss = 0
         for i, seq in enumerate(seqs):
             outputs, trigger_embeds = esm.my_forward(tokenizer, model, [seq], trigger, dev1, dev2)
-            error = outputs.predicted_aligned_error.to(dtype=torch.float16)
             coord0 = coords0[i].to(dev2)
-            pred = outputs['positions'][-1][:, :-len(trigger), :]
-            exists = outputs['atom14_atom_exists'][:, :-len(trigger), :].to(dev2)
+            pred = outputs['positions'][-1]
+            exists = outputs['atom14_atom_exists'].to(dev2)
+            if PICK_ENTRY is None:
+                pred = pred[:, :-len(trigger), :]
+                exists = exists[:, :-len(trigger), :]
             error = structure_rmsd(pred, exists, coord0)
             loss = torch.mean(error)
             avg_loss += loss
             if i == view_seq:
                 print("Initial sequence:", seq, trigger)
-                pdb = esm.convert_outputs_to_pdb(outputs)
-                esm.save_pdb(pdb, 'initial_structure.pdb')
+            pdb = esm.convert_outputs_to_pdb(outputs)
+            esm.save_pdb(pdb, f'outputs/initial_structure_{entries[i]}.pdb')
         avg_loss /= len(seqs)
         print("Initial loss:", avg_loss)
 
@@ -96,8 +116,11 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
             }
 
             coord0 = coords0[i].to(dev2)
-            pred = outputs['positions'][-1][:, :-len(trigger), :]
-            exists = outputs['atom14_atom_exists'][:, :-len(trigger), :].to(dev2)
+            pred = outputs['positions'][-1]
+            exists = outputs['atom14_atom_exists'].to(dev2)
+            if PICK_ENTRY is None:
+                pred = pred[:, :-len(trigger), :]
+                exists = exists[:, :-len(trigger), :]
             error = structure_rmsd(pred, exists, coord0)
             coord0.to('cpu')
 
@@ -151,25 +174,28 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
         avg_loss = 0
         for i, seq in enumerate(seqs):
             outputs, trigger_embeds = esm.my_forward(tokenizer, model, [seq], trigger, dev1, dev2)
-            error = outputs.predicted_aligned_error.to(dtype=torch.float16)
-            loss = 0
             coord0 = coords0[i].to(dev2)
-            pred = outputs['positions'][-1][:, :-len(trigger), :]
-            exists = outputs['atom14_atom_exists'][:, :-len(trigger), :].to(dev2)
+            pred = outputs['positions'][-1]
+            exists = outputs['atom14_atom_exists'].to(dev2)
+            if PICK_ENTRY is None:
+                pred = pred[:, :-len(trigger), :]
+                exists = exists[:, :-len(trigger), :]
+            print("final shapes:", pred.shape, coord0.shape)
             error = structure_rmsd(pred, exists, coord0)
             coord0.to('cpu')
             loss = torch.mean(error)
             avg_loss += loss
             if i == view_seq:
                 print("Final sequence:", seq, trigger)
-                pdb = esm.convert_outputs_to_pdb(outputs)
-                esm.save_pdb(pdb, 'final_structure.pdb')
+            pdb = esm.convert_outputs_to_pdb(outputs)
+            esm.save_pdb(pdb, f'outputs/final_structure_{entries[i]}.pdb')
         avg_loss /= len(seqs)
         print("Final loss:", avg_loss)
 
     return trigger
 
 if __name__ == '__main__':
+    STEPS = 2
     start_time = time.time()
     tokenizer, model = esm.get_esmfold()
 
@@ -193,7 +219,7 @@ if __name__ == '__main__':
     df = uniprot.read_seqs_df()
 
     torch.cuda.empty_cache()
-    trigger = get_trigger(tokenizer, model, df, 16, dev1, dev2)
+    trigger = get_trigger(tokenizer, model, df, STEPS, dev1, dev2)
     print("Trigger:", trigger)
     seconds = time.time() - start_time
     minutes = int(seconds / 60)
