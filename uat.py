@@ -4,11 +4,13 @@ import torch
 import time
 import esm_2952q as esm
 import uniprot
+import numpy as np
 from Levenshtein import distance as ldist
 
 LOSS_FACTOR = 1 # positive to minimize rmsd, negative to maximize rmsd
 PICK_ENTRY = None # use all valid RCSB entries
-PICK_ENTRY = 'Q07654'
+# PICK_ENTRY = 'Q07654'
+PICK_ENTRY = 'P0AC62'
 
 def structure_rmsd(pred, pred_exists, true, ca_only=True):
     if ca_only:
@@ -22,12 +24,12 @@ def structure_rmsd(pred, pred_exists, true, ca_only=True):
     square_diff = torch.square(aligned - true)
     if ca_only:
         error = square_diff.sum(dim=1).to(dev2) # num residues
+        msd = error.unsqueeze(1) # num residues, 1   (for 1 atom)
     else:
         error = square_diff.sum(dim=2).to(dev2) # num residues, num atoms
-    rmsd = error * pred_exists
-    if ca_only:
-        rmsd = rmsd.unsqueeze(1) # num residues, 1
-    return LOSS_FACTOR * rmsd[:, :]
+        msd = error * pred_exists
+    rmsd = torch.sqrt(msd)
+    return LOSS_FACTOR * rmsd
 
 def get_trigger(tokenizer, model, df, steps, dev1, dev2):
     seqs = df['Sequence'].tolist()
@@ -59,12 +61,16 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
             entries.pop(i)
     print([(seq, len(seq)) for seq in seqs], len(seqs))
     print([c.shape for c in coords0], len(coords0))
+    print(entries)
     trigger = 'G' * TRIGGER_LEN # initial trigger, will be updated
     view_seq = 6
     true_seq = None
     if PICK_ENTRY is not None:
         true_seq = seqs[0]
-        trigger = 'G' * len(true_seq)
+        trigger = ''
+        np.random.seed(42)
+        for _ in range(len(true_seq)):
+            trigger += np.random.choice(esm.aa)
         seqs[0] = ''
         TRIGGER_LEN = 0
         view_seq = 0
@@ -165,6 +171,7 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
             trigger_embeds = esm.tokenize_and_embed(tokenizer, model, trigger).to('cpu') # trigger_len x dim
             print("trigger_embeds:", trigger_embeds.shape)
             assert aa_emb.size(0) == 20 # total amino acids
+            diffs = []
             for i in range(trigger_embeds.size(1)):
                 trigger_i = trigger_embeds[:, i, :]
                 trigger_i = torch.repeat_interleave(trigger_i, 20, dim=0)
@@ -173,7 +180,13 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
                 dot_prod = diff * grad_i
                 dot_prod = torch.sum(dot_prod, dim=1)
                 min_aa = torch.argmin(dot_prod).item()
-                trigger = trigger[:i] + esm.aa[min_aa] + trigger[i+1:]
+                diffs.append((torch.min(dot_prod).item(), min_aa))
+                # trigger = trigger[:i] + esm.aa[min_aa] + trigger[i+1:]
+            best_diffs = sorted(diffs)[:5] # only update up to 5 residues at a time
+            for i in range(len(diffs)):
+                if diffs[i][0] <= best_diffs[-1][0]:
+                    min_aa = diffs[i][1]
+                    trigger = trigger[:i] + esm.aa[min_aa] + trigger[i+1:]
             print("Updated trigger:", trigger)
             if true_seq is not None:
                 print("Distance:", ldist(true_seq, seq + trigger))
@@ -208,7 +221,7 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
     return trigger
 
 if __name__ == '__main__':
-    STEPS = 32
+    STEPS = 128
     start_time = time.time()
     tokenizer, model = esm.get_esmfold()
 
