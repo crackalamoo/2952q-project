@@ -4,26 +4,29 @@ import torch
 import time
 import esm_2952q as esm
 import uniprot
+from Levenshtein import distance as ldist
 
-LOSS_FACTOR = -1 # positive to minimize rmsd, negative to maximize rmsd
+LOSS_FACTOR = 1 # positive to minimize rmsd, negative to maximize rmsd
 PICK_ENTRY = None # use all valid RCSB entries
+PICK_ENTRY = 'Q07654'
 
 def structure_rmsd(pred, pred_exists, true, ca_only=True):
     if ca_only:
-        pred = pred[:, 1, :]
-        pred_exists = pred_exists[:, 1, :]
-        true = true[:, 1, :]
+        pred = pred[:, :, 1, :] # batch size, num residues, num atoms, 3
+        pred_exists = pred_exists[:, :, 1] # batch size, num residues, num atoms
+        true = true[:, :, 1, :]
     aligned, _ = esm.kabsch_align(true.view(-1, 3), pred.view(-1, 3))
     if not ca_only:
-        aligned = aligned.view(-1, 14, 3)
+        aligned = aligned.view(-1, 14, 3) # num residues, num atoms, 3
+    # else: num residues, 3
     square_diff = torch.square(aligned - true)
     if ca_only:
-        error = square_diff.sum(dim=2).to(dev2)
+        error = square_diff.sum(dim=1).to(dev2) # num residues
     else:
-        error = square_diff.sum(dim=3).to(dev2)
+        error = square_diff.sum(dim=2).to(dev2) # num residues, num atoms
     rmsd = error * pred_exists
     if ca_only:
-        rmsd = rmsd.unsqueeze(0)
+        rmsd = rmsd.unsqueeze(1) # num residues, 1
     return LOSS_FACTOR * rmsd[:, :]
 
 def get_trigger(tokenizer, model, df, steps, dev1, dev2):
@@ -58,9 +61,11 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
     print([c.shape for c in coords0], len(coords0))
     trigger = 'G' * TRIGGER_LEN # initial trigger, will be updated
     view_seq = 6
+    true_seq = None
     if PICK_ENTRY is not None:
-        trigger = 'G' * (len(seqs[0]) - 1)
-        seqs[0] = 'M'
+        true_seq = seqs[0]
+        trigger = 'G' * len(true_seq)
+        seqs[0] = ''
         TRIGGER_LEN = 0
         view_seq = 0
 
@@ -71,13 +76,13 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
     with torch.no_grad():
 
         print("Sequence from database:", seqs[view_seq])
-        outputs, _ = esm.my_forward(tokenizer, model, [seqs[view_seq]], '', dev1, dev2)
+        outputs, _ = esm.my_forward(tokenizer, model, [true_seq], '', dev1, dev2)
         pdb = esm.convert_outputs_to_pdb(outputs)
         # esm.save_pdb(pdb, f'outputs/output_structure_{entries[view_seq]}.pdb')
 
         avg_loss = 0
         for i, seq in enumerate(seqs):
-            outputs, trigger_embeds = esm.my_forward(tokenizer, model, [seq], trigger, dev1, dev2)
+            outputs, trigger_embeds = esm.my_forward(tokenizer, model, [true_seq], '', dev1, dev2)
             coord0 = coords0[i].to(dev2)
             pred = outputs['positions'][-1]
             exists = outputs['atom14_atom_exists'].to(dev2)
@@ -92,6 +97,9 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
             pdb = esm.convert_outputs_to_pdb(outputs)
             esm.save_pdb(pdb, f'outputs/initial_structure_{entries[i]}.pdb')
         avg_loss /= len(seqs)
+        if true_seq is not None:
+            print("True sequence:", true_seq)
+            print("Distance:", ldist(true_seq, seq + trigger))
         print("Initial loss:", avg_loss)
 
     min_loss = None
@@ -167,6 +175,8 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
                 min_aa = torch.argmin(dot_prod).item()
                 trigger = trigger[:i] + esm.aa[min_aa] + trigger[i+1:]
             print("Updated trigger:", trigger)
+            if true_seq is not None:
+                print("Distance:", ldist(true_seq, seq + trigger))
 
     print("Best trigger:", best_trigger, min_loss)
     trigger = best_trigger
@@ -187,6 +197,9 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
             avg_loss += loss
             if i == view_seq:
                 print("Final sequence:", seq, trigger)
+                if true_seq is not None:
+                    print("True sequence:", true_seq)
+                    print("Distance:", ldist(true_seq, seq + trigger))
             pdb = esm.convert_outputs_to_pdb(outputs)
             esm.save_pdb(pdb, f'outputs/final_structure_{entries[i]}.pdb')
         avg_loss /= len(seqs)
@@ -195,7 +208,7 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
     return trigger
 
 if __name__ == '__main__':
-    STEPS = 2
+    STEPS = 32
     start_time = time.time()
     tokenizer, model = esm.get_esmfold()
 
