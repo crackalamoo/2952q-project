@@ -7,10 +7,10 @@ import uniprot
 import numpy as np
 from Levenshtein import distance as ldist
 
-LOSS_FACTOR = -1 # positive to minimize rmsd, negative to maximize rmsd
+LOSS_FACTOR = 1 # positive to minimize rmsd, negative to maximize rmsd
 PICK_ENTRY = None # use all valid RCSB entries
 # PICK_ENTRY = 'Q07654'
-# PICK_ENTRY = 'P0AC62'
+PICK_ENTRY = 'P0AC62'
 
 def structure_rmsd(pred, pred_exists, true, ca_only=True):
     if ca_only:
@@ -62,7 +62,6 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
     print([(seq, len(seq)) for seq in seqs], len(seqs))
     print([c.shape for c in coords0], len(coords0))
     view_seq = 6
-    print(entries, entries[view_seq])
     trigger = 'G' * TRIGGER_LEN # initial trigger, will be updated
     true_seq = None
     if PICK_ENTRY is not None:
@@ -74,6 +73,7 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
         seqs[0] = ''
         TRIGGER_LEN = 0
         view_seq = 0
+    print(entries, entries[view_seq])
 
     aa_emb = esm.tokenize_and_embed(tokenizer, model, esm.aa).to('cpu')
     print(aa_emb.shape)
@@ -113,8 +113,8 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
         if true_seq is not None:
             print("True sequence:", true_seq)
             print("Distance:", ldist(true_seq, seq + trigger))
-        print("Initial loss:", avg_loss)
-        initial_loss = avg_loss
+        initial_loss = avg_loss.item()
+        print("Initial loss:", initial_loss)
 
     min_loss = None
     best_trigger = None
@@ -170,16 +170,23 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
         avg_loss /= len(seqs)
         print("AVERAGE LOSS:", avg_loss)
         avg_losses.append(avg_loss)
+        if true_seq is not None:
+            print("True sequence:", true_seq)
+            distance = ldist(true_seq, seq + trigger)
+            print("Distance:", distance)
+            distances.append(distance)
         if min_loss is None or avg_loss < min_loss:
             min_loss = avg_loss
             best_trigger = trigger
-        elif len(avg_losses) > 5 and avg_loss > min_loss and avg_loss > avg_losses[-2] and avg_loss > avg_losses[-3]:
+            print("new min loss:", min_loss)
+        elif len(avg_losses) > 5 and avg_loss > min_loss and avg_losses[-2] > min_loss and avg_losses[-3] > min_loss:
             print("resetting")
             trigger = best_trigger
+            new_trigger = trigger
             for _ in range(3):
-                switch_idx = np.random.randint(len(trigger))
+                switch_idx = np.random.randint(len(new_trigger))
                 switch_val = np.random.choice(esm.aa)
-                new_trigger = trigger[:switch_idx] + switch_val + trigger[switch_idx+1:]
+                new_trigger = new_trigger[:switch_idx] + switch_val + new_trigger[switch_idx+1:]
             print(trigger, '->', new_trigger)
             trigger = new_trigger
             continue
@@ -207,11 +214,6 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
                     min_aa = diffs[i][1]
                     trigger = trigger[:i] + esm.aa[min_aa] + trigger[i+1:]
             print("Updated trigger:", trigger)
-            if true_seq is not None:
-                print("True sequence:", true_seq)
-                distance = ldist(true_seq, seq + trigger)
-                print("Distance:", distance)
-                distances.append(distance)
         sys.stdout.flush()
 
     print("Best trigger:", best_trigger, min_loss)
@@ -247,7 +249,7 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
     return trigger
 
 if __name__ == '__main__':
-    STEPS = 128 if PICK_ENTRY else 16
+    STEPS = 256 if PICK_ENTRY else 16
     start_time = time.time()
     tokenizer, model = esm.get_esmfold()
 
