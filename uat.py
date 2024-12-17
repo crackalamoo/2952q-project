@@ -7,10 +7,10 @@ import uniprot
 import numpy as np
 from Levenshtein import distance as ldist
 
-LOSS_FACTOR = 1 # positive to minimize rmsd, negative to maximize rmsd
+LOSS_FACTOR = -1 # positive to minimize rmsd, negative to maximize rmsd
 PICK_ENTRY = None # use all valid RCSB entries
 # PICK_ENTRY = 'Q07654'
-PICK_ENTRY = 'P0AC62'
+# PICK_ENTRY = 'P0AC62'
 
 def structure_rmsd(pred, pred_exists, true, ca_only=True):
     if ca_only:
@@ -61,9 +61,9 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
             entries.pop(i)
     print([(seq, len(seq)) for seq in seqs], len(seqs))
     print([c.shape for c in coords0], len(coords0))
-    print(entries)
-    trigger = 'G' * TRIGGER_LEN # initial trigger, will be updated
     view_seq = 6
+    print(entries, entries[view_seq])
+    trigger = 'G' * TRIGGER_LEN # initial trigger, will be updated
     true_seq = None
     if PICK_ENTRY is not None:
         true_seq = seqs[0]
@@ -78,23 +78,30 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
     aa_emb = esm.tokenize_and_embed(tokenizer, model, esm.aa).to('cpu')
     print(aa_emb.shape)
     chunk_size = 50
-    # chunk_size = 2
+    initial_loss = None
+    avg_losses = []
+    distances = []
+
     with torch.no_grad():
 
         print("Sequence from database:", seqs[view_seq])
-        outputs, _ = esm.my_forward(tokenizer, model, [true_seq], '', dev1, dev2)
-        pdb = esm.convert_outputs_to_pdb(outputs)
-        # esm.save_pdb(pdb, f'outputs/output_structure_{entries[view_seq]}.pdb')
+        if true_seq is None:
+            outputs, _ = esm.my_forward(tokenizer, model, [seqs[view_seq]], trigger, dev1, dev2)
+            pdb = esm.convert_outputs_to_pdb(outputs)
+            esm.save_pdb(pdb, f'outputs/output_structure_{entries[view_seq]}.pdb')
 
         avg_loss = 0
         for i, seq in enumerate(seqs):
-            outputs, trigger_embeds = esm.my_forward(tokenizer, model, [true_seq], '', dev1, dev2)
+            if true_seq is not None:
+                outputs, trigger_embeds = esm.my_forward(tokenizer, model, [true_seq], '', dev1, dev2)
+            else:
+                outputs, _ = esm.my_forward(tokenizer, model, [seq], '', dev1, dev2)
             coord0 = coords0[i].to(dev2)
             pred = outputs['positions'][-1]
             exists = outputs['atom14_atom_exists'].to(dev2)
-            if PICK_ENTRY is None:
-                pred = pred[:, :-len(trigger), :]
-                exists = exists[:, :-len(trigger), :]
+            # if PICK_ENTRY is None:
+            #     pred = pred[:, :-len(trigger), :]
+            #     exists = exists[:, :-len(trigger), :]
             error = structure_rmsd(pred, exists, coord0)
             loss = torch.mean(error)
             avg_loss += loss
@@ -107,6 +114,7 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
             print("True sequence:", true_seq)
             print("Distance:", ldist(true_seq, seq + trigger))
         print("Initial loss:", avg_loss)
+        initial_loss = avg_loss
 
     min_loss = None
     best_trigger = None
@@ -161,9 +169,20 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
             avg_loss += loss
         avg_loss /= len(seqs)
         print("AVERAGE LOSS:", avg_loss)
+        avg_losses.append(avg_loss)
         if min_loss is None or avg_loss < min_loss:
             min_loss = avg_loss
             best_trigger = trigger
+        elif len(avg_losses) > 5 and avg_loss > min_loss and avg_loss > avg_losses[-2] and avg_loss > avg_losses[-3]:
+            print("resetting")
+            trigger = best_trigger
+            for _ in range(3):
+                switch_idx = np.random.randint(len(trigger))
+                switch_val = np.random.choice(esm.aa)
+                new_trigger = trigger[:switch_idx] + switch_val + trigger[switch_idx+1:]
+            print(trigger, '->', new_trigger)
+            trigger = new_trigger
+            continue
 
         with torch.no_grad():
             # compute new trigger
@@ -189,7 +208,11 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
                     trigger = trigger[:i] + esm.aa[min_aa] + trigger[i+1:]
             print("Updated trigger:", trigger)
             if true_seq is not None:
-                print("Distance:", ldist(true_seq, seq + trigger))
+                print("True sequence:", true_seq)
+                distance = ldist(true_seq, seq + trigger)
+                print("Distance:", distance)
+                distances.append(distance)
+        sys.stdout.flush()
 
     print("Best trigger:", best_trigger, min_loss)
     trigger = best_trigger
@@ -212,16 +235,19 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
                 print("Final sequence:", seq, trigger)
                 if true_seq is not None:
                     print("True sequence:", true_seq)
-                    print("Distance:", ldist(true_seq, seq + trigger))
+                    print("Final distance:", ldist(true_seq, seq + trigger), '/', len(true_seq))
             pdb = esm.convert_outputs_to_pdb(outputs)
             esm.save_pdb(pdb, f'outputs/final_structure_{entries[i]}.pdb')
         avg_loss /= len(seqs)
         print("Final loss:", avg_loss)
+        print("Initial loss:", initial_loss)
+        print("Losses:", avg_losses)
+        print("Distances:", distances)
 
     return trigger
 
 if __name__ == '__main__':
-    STEPS = 128
+    STEPS = 128 if PICK_ENTRY else 16
     start_time = time.time()
     tokenizer, model = esm.get_esmfold()
 
