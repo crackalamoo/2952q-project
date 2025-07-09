@@ -10,7 +10,7 @@ from Levenshtein import distance as ldist
 LOSS_FACTOR = 1 # positive to minimize rmsd, negative to maximize rmsd
 PICK_ENTRY = None # use all valid RCSB entries
 # PICK_ENTRY = 'Q07654'
-PICK_ENTRY = 'P0AC62'
+# PICK_ENTRY = 'P0AC62'
 
 def structure_rmsd(pred, pred_exists, true, ca_only=True):
     if ca_only:
@@ -187,7 +187,8 @@ def get_trigger(tokenizer, model, df, steps, dev1, dev2):
                 switch_idx = np.random.randint(len(new_trigger))
                 switch_val = np.random.choice(esm.aa)
                 new_trigger = new_trigger[:switch_idx] + switch_val + new_trigger[switch_idx+1:]
-            print(trigger, '->', new_trigger)
+            print(trigger)
+            print(new_trigger)
             trigger = new_trigger
             continue
 
